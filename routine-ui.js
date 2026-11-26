@@ -586,7 +586,12 @@
     $('exercisePicker').close();
     drawDraft();
   };
+  $('exercisePicker').addEventListener('close', () => {
+    if (matchesActive() && !$('exerciseOptions').hidden && !document.querySelector('dialog[open]'))
+      $('exerciseOptions').focus({ preventScroll: true });
+  });
   $('substituteExercise').onclick = () => {
+    $('exerciseOptionsSheet').close();
     const row = currentRow();
     if (row) openPicker('today', row.id);
   };

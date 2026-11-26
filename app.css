@@ -454,9 +454,6 @@ td small {
   color: var(--muted);
   font-size: 0.74rem;
 }
-.historyFilters {
-  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
-}
 .workoutCard summary {
   align-items: center;
   min-height: 62px;
@@ -907,9 +904,6 @@ dialog .actions {
   .panel {
     padding-inline: 12px;
   }
-  .historyFilters {
-    grid-template-columns: 1fr;
-  }
 }
 @media (prefers-reduced-motion: reduce) {
   .waterFill {
@@ -994,3 +988,65 @@ textarea { width: 100%; background: var(--bg); border: 1px solid var(--border); 
 #trainingLog.planActive .comparison { grid-template-columns: 1fr; margin-block: 9px }
 #trainingLog.planActive .comparison > :first-child { display: none }
 #trainingLog.planActive .comparison > :last-child { display: flex; justify-content: space-between; align-items: center }
+
+/* Active workout */
+.workoutHeader { display: grid; grid-template-columns: minmax(0,1fr) auto auto; gap: 5px 8px; align-items: center; margin-bottom: 14px }
+.workoutHeaderText { min-width: 0; display: grid; gap: 2px }
+.workoutHeaderText strong { font-size: .95rem; overflow-wrap: anywhere }
+#workoutPosition { font-variant-numeric: tabular-nums }
+#workoutProgress { grid-column: 1/-1; width: 100%; height: 4px; margin-top: 3px; accent-color: var(--accent) }
+#finishWorkout { padding-inline: 13px }
+.iconButton { width: 44px; min-height: 44px; flex: 0 0 44px; padding: 0; font-size: .9rem; letter-spacing: .06em }
+.exerciseHeading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px }
+.exerciseHeading .exerciseTitle { margin: 0; min-width: 0 }
+.exerciseStatus { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 2px 8px }
+.exerciseStatus span:empty { display: none }
+.recommendation > div { display: grid; gap: 1px; border: 0; padding: 0 }
+.recommendation { display: flex !important; justify-content: space-between; align-items: center; gap: 8px }
+#applyTarget { padding-inline: 12px; font-size: .82rem }
+.setActions, .calculatorActions { display: flex; gap: 8px; align-items: center }
+.setActions { justify-content: space-between; margin-top: -3px }
+.calculatorActions { margin: 3px 0 5px }
+.calculatorActions button { display: inline-flex; align-items: center; gap: 6px; padding-inline: 10px; font-size: .83rem }
+.calculatorActions svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round }
+.completedSetIndex { color: var(--accent); font-weight: 750 }
+.loggerActions:has(#cancelEdit[hidden]) { display: none }
+#exerciseNavigation { margin: 0 0 15px }
+.upNext { display: flex; align-items: baseline; flex-wrap: wrap; gap: 3px 9px; padding: 1px 3px 8px }
+.upNext strong { min-width: 0; overflow-wrap: anywhere; font-size: .9rem }
+#nextExercise { min-height: 48px }
+#routineCard:not(.activeQueue) > details > summary { display: none }
+#routineCard.activeQueue > .sectionLine { margin-bottom: 0 }
+#queueDisclosure > summary { min-height: 44px }
+#timerbar { width: min(440px, calc(100% - 24px)); justify-content: flex-start; gap: 4px; padding: 3px 8px 8px }
+#timerbar button { padding-inline: 8px }
+.timerReadout { display: flex; flex: 1; align-items: baseline; gap: 6px; min-width: 0 }
+.timerReadout span { color: var(--muted); font-size: .73rem }
+#barclock { font-size: 1.34rem }
+#restProgress { height: 3px }
+html:has(#timerbar:not([hidden])) { scroll-padding-bottom: calc(154px + var(--bottom)) }
+body:has(#timerbar:not([hidden])) main { padding-bottom: calc(171px + var(--bottom)) }
+.actionSheet { width: min(440px, calc(100% - 20px)); padding: 0; max-height: min(75vh, var(--builder-height, 75vh)); overflow: auto }
+.actionSheet .optionList { padding: 8px 16px 15px }
+.actionSheet .optionList > button { min-height: 46px }
+.actionSheet .optionList > .settingRow { border-bottom: 1px solid var(--border); border-top: 0 }
+.actionSheet .optionList > .settingRow:last-child { border-bottom: 0 }
+.performanceCard + .performanceCard { border-top: 1px solid var(--border); padding-top: 9px }
+.performanceSets { margin: 5px 0 12px; padding-left: 24px; color: var(--muted); font-size: .87rem }
+@media (max-width:600px) {
+  .actionSheet, .calculatorSheet {
+    position: fixed; inset: auto 0 0; margin: 0 auto; width: 100%; max-width: 100%;
+    border-radius: 18px 18px 0 0; padding-bottom: var(--bottom);
+  }
+  .calculatorSheet { height: min(75dvh, var(--builder-height, 75dvh)); }
+  .calculatorSheet .sheetHeader { padding-top: 10px }
+}
+
+main:has([data-page='workout']:not([hidden]) #trainingLog.planActive) .pageHeading { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+main:has([data-page='workout']:not([hidden]) #trainingLog.planActive) .appHeader { margin-bottom: 10px }
+#plannedSets th:first-child { width: 13% }
+#plannedSets th:last-child { width: 26%; text-align: right }
+#workoutProgress, #restProgress { appearance: none; border: 0; border-radius: 4px; background: var(--border); overflow: hidden }
+#workoutProgress::-webkit-progress-bar, #restProgress::-webkit-progress-bar { background: var(--border) }
+#workoutProgress::-webkit-progress-value, #restProgress::-webkit-progress-value { background: var(--accent) }
+#workoutProgress::-moz-progress-bar, #restProgress::-moz-progress-bar { background: var(--accent) }

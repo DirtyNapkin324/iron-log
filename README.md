@@ -2,9 +2,16 @@
 
 Iron Log is a local-first strength training PWA with optional Supabase workout backups and hydration groups. Training, routines, exercise settings and the rest timer stay usable offline.
 
-## Iron Log 5.5
+## Iron Log 5.5.1
 
 Train opens a dedicated logger with an exercise queue, working-set progress and a completion summary. History expands by workout, and Progress and Body show charts and period metrics. Hydration focuses on intake and groups. Membership, recovery and backups live in Profile.
+
+## Active workout interface
+
+- Use the workout menu beside **Finish** to edit workout details or cancel. You can keep logged sets, or explicitly confirm that the sets tied to the active session should be discarded. Older sets without a verified session link are kept.
+- The exercise menu holds substitutions, settings, notes, previous performances, and skipping. **Next exercise** previews the next prescription and asks before leaving incomplete sets behind.
+- Apply recommendations in the exercise card. Warm-up and plate calculators open in sheets and retain their in-session inputs while the selected exercise and working load stay the same.
+- History shows all workout types together. Its calendar and search still narrow what is displayed.
 
 ## Training experience
 
@@ -18,7 +25,7 @@ Train opens a dedicated logger with an exercise queue, working-set progress and 
 
 - Open a local or cloud backup to preview added, skipped and conflicting records. Merge keeps the current value for conflicts. Distinct set IDs remain distinct even when their numbers match. Older sets without IDs use a fingerprint and occurrence count.
 - Replace stores one pre-replacement snapshot on this device. Recover or export it under **Profile → Local backups and export**. Each successful replacement keeps the immediately preceding snapshot. Replacement stops if the browser cannot store it.
-- Backups include workout sessions and notes, active workout drafts, training preferences, bodyweight goals, routines, exercise settings and exercise notes. Older backups remain readable and old storage keys are retained. No database migration is required for 5.5.
+- Backups include workout sessions and notes, active workout drafts, training preferences, bodyweight goals, routines, exercise settings and exercise notes. Older backups remain readable and old storage keys are retained. No database migration is required for 5.5.1.
 - The existing cloud backup remains a single version with conflict protection. Supabase Free has a 500 MB database limit, so 5.5 keeps rollback on the device instead of storing multiple cloud copies of each complete backup.
 
 ## Routine builder

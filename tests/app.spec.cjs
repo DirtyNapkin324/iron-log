@@ -452,7 +452,9 @@ test('prescriptions, custom library entries and substitutions preserve distinct 
   await page.locator('#saveSet').click();
   await expect(page.locator('#barclock')).toHaveText(/^01:1[0-5]$/);
   await expect(page.locator('#exerciseTitle')).toHaveText('Incline Dumbbell Press');
+  await page.locator('#queueDisclosure summary').click();
   await page.locator('#coachplan').getByRole('button', { name: /Bench press/ }).first().click();
+  await page.locator('#exerciseOptions').click();
   await page.locator('#substituteExercise').click();
   await selectExercise(page, 'Smith Machine Bench Press');
   await page.locator('#addSelected').click();
@@ -537,6 +539,9 @@ test('active logger compares prior sets, tracks classification, and preserves dr
   await page.locator('#plateTarget').fill('186');
   await expect(page.locator('#plateResult')).toContainText('Target is unavailable');
   await page.locator('#platesClose').click();
+  await page.locator('#platesOpen').click();
+  await expect(page.locator('#plateTarget')).toHaveValue('186');
+  await page.locator('#platesClose').click();
   await page.locator('#setDetails summary').click();
   await page.locator('#partialReps').fill('2');
   await page.locator('#failedSet').check();
@@ -549,6 +554,7 @@ test('active logger compares prior sets, tracks classification, and preserves dr
   await expect(page.locator('#currentsets')).toContainText('Warm-up');
   await page.locator('#addWorkingSet').click();
   await expect(page.locator('#plannedSets tbody tr')).toHaveCount(4);
+  await page.locator('#exerciseOptions').click();
   await page.locator('#removeWorkingSet').click();
   await expect(page.locator('#plannedSets tbody tr')).toHaveCount(3);
 });
@@ -567,6 +573,7 @@ test('timer, calendar, muscle volume, records and unit preferences work together
   await page.reload();
   await expect(page.locator('#barclock')).toHaveText(after);
   await page.locator('#barstop').click();
+  await page.locator('#workoutOptions').click();
   await page.locator('#sessionOpen').click();
   await page.locator('#workoutMemo').fill('Training fixture');
   await page.locator('#workoutDetailsForm').getByRole('button', { name: 'Save details' }).click();
@@ -641,4 +648,126 @@ test('superset changes exercise after the first lift and starts rest after the s
   await page.locator('#saveSet').click();
   await expect(page.locator('#exerciseTitle')).toHaveText('Bench press');
   await expect(page.locator('#timerbar')).toBeVisible();
+});
+
+test('cancelling an empty workout clears its draft and rest timer on reload', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('#beginWorkout').click();
+  await page.locator('#weight').fill('185');
+  await page.locator('.restPanel summary').click();
+  await page.locator('[data-rest="120"]').click();
+  await expect(page.locator('#timerbar')).toBeVisible();
+  await page.locator('#workoutOptions').click();
+  await page.locator('#cancelWorkout').click();
+  await expect(page.locator('#beginWorkout')).toBeVisible();
+  await expect(page.locator('#timerbar')).toBeHidden();
+  await page.reload();
+  await expect(page.locator('#beginWorkout')).toBeVisible();
+  await expect(page.locator('#timerbar')).toBeHidden();
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('iron-log-active-v1')))).toBeNull();
+});
+
+test('cancel keeps logged sets and clears the active workout from automatic cloud backup', async ({ page }) => {
+  const cloud = await fakeCloud(page);
+  await page.goto('/');
+  await tab(page, 'settings');
+  await page.locator('#autoCloud').check();
+  await confirm(page);
+  await expect(page.locator('#autoCloudStatus')).toContainText('Automatic backups on');
+  await tab(page, 'workout');
+  await page.locator('#beginWorkout').click();
+  await page.locator('#weight').fill('100');
+  await page.locator('#saveSet').click();
+  await page.locator('#workoutOptions').click();
+  await page.locator('#cancelWorkout').click();
+  await expect(page.locator('#cancelWorkoutSheet')).toBeVisible();
+  await page.locator('#continueWorkout').click();
+  await expect(page.locator('#setProgressText')).toHaveText('1 of 3 working sets');
+  await page.locator('#workoutOptions').click();
+  await page.locator('#cancelWorkout').click();
+  await page.locator('#cancelKeep').click();
+  await expect(page.locator('#beginWorkout')).toBeVisible();
+  await expect.poll(() => cloud.payload?.sets.length).toBe(1);
+  expect(cloud.payload.activeSession).toBeNull();
+  await page.reload();
+  await tab(page, 'history');
+  await expect(page.locator('.workoutCard summary')).toContainText('Push');
+});
+
+test('discard affects only the active session and History shows all workout types', async ({ page }) => {
+  await page.addInitScript(() => {
+    if (localStorage.getItem('iron-log-coach-v3')) return;
+    const now = new Date();
+    const date = [now.getFullYear(), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0')].join('-');
+    const old = { id: 'legacy-same-day', date, split: 'Push', exercise: 'Bench press', weight: 110, reps: 5, rir: '', notes: '' };
+    localStorage.setItem('iron-log-coach-v3', JSON.stringify({ body: [], sets: [
+      old, { ...old, id: 'prior-session', workoutId: 'historical-workout' },
+      { ...old, id: 'separate-set', split: 'Fitness assignment', exercise: 'Separate Bench' }
+    ] }));
+  });
+  await page.goto('/');
+  await page.locator('#beginWorkout').click();
+  await page.locator('#weight').fill('120');
+  await page.locator('#saveSet').click();
+  await page.locator('#workoutOptions').click();
+  await page.locator('#cancelWorkout').click();
+  await page.locator('#cancelDiscard').click();
+  await expect(page.locator('#confirmTitle')).toHaveText('Discard logged sets?');
+  await confirm(page);
+  await page.reload();
+  await tab(page, 'history');
+  await expect(page.getByLabel('Workout type')).toHaveCount(0);
+  await expect(page.locator('#history .workoutCard')).toHaveCount(3);
+  const ids = await page.evaluate(() => JSON.parse(localStorage.getItem('iron-log-coach-v3')).sets.map(set => set.id));
+  expect(ids).toEqual(['legacy-same-day', 'prior-session', 'separate-set']);
+  await page.locator('#searchHistory').fill('Separate Bench');
+  await expect(page.locator('#history .workoutCard summary')).toHaveText(/Separate workout/);
+});
+
+test('exercise options and the primary Next action protect incomplete work', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('#beginWorkout').click();
+  await expect(page.locator('#workoutPosition')).toContainText('Exercise 1 of 6');
+  await expect(page.locator('#upNextName')).toHaveText('Incline Dumbbell Press');
+  await page.locator('#nextExercise').click();
+  await expect(page.locator('#confirmTitle')).toHaveText('Skip exercise?');
+  await page.locator('#confirmation').getByRole('button', { name: 'Cancel' }).click();
+  await expect(page.locator('#exerciseTitle')).toHaveText('Bench press');
+  await page.locator('#exerciseOptions').click();
+  await page.locator('#exerciseNotesOpen').click();
+  await page.locator('#exerciseMemo').fill('Pause briefly');
+  await page.locator('#saveExerciseMemo').click();
+  await page.locator('#exerciseNotesSheet').getByRole('button', { name: 'Done' }).click();
+  await expect(page.locator('#exerciseOptions')).toBeFocused();
+  await page.locator('#reps').fill('9');
+  await page.getByRole('button', { name: 'Apply recommendation' }).click();
+  await expect(page.locator('#reps')).toHaveValue('4');
+  await page.locator('#exerciseOptions').click();
+  await page.locator('#performanceOpen').click();
+  await expect(page.locator('#performanceList')).toContainText('No previous working sets');
+  await page.locator('#performanceSheet').getByRole('button', { name: 'Done' }).click();
+  await page.locator('#nextExercise').click();
+  await confirm(page);
+  await expect(page.locator('#exerciseTitle')).toHaveText('Incline Dumbbell Press');
+  await expect(page.locator('#platesOpen')).toBeHidden();
+});
+
+test('older unfinished workouts cannot discard unverified same-day sets', async ({ page }) => {
+  await page.addInitScript(() => {
+    if (localStorage.getItem('iron-log-coach-v3')) return;
+    const now = new Date();
+    const date = [now.getFullYear(), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0')].join('-');
+    localStorage.setItem('iron-log-active-v1', JSON.stringify({ date, split: 'Push', exercise: 'Bench press', started: Date.now() }));
+    localStorage.setItem('iron-log-coach-v3', JSON.stringify({ body: [], sets: [
+      { id: 'unverified', date, split: 'Push', exercise: 'Bench press', weight: 110, reps: 5, rir: '', notes: '' }
+    ] }));
+  });
+  await page.goto('/');
+  await page.locator('#workoutOptions').click();
+  await page.locator('#cancelWorkout').click();
+  await expect(page.locator('#cancelWorkoutMessage')).toContainText('without a verified session link');
+  await expect(page.locator('#cancelDiscard')).toBeHidden();
+  await page.locator('#cancelKeep').click();
+  await expect(page.locator('#beginWorkout')).toBeVisible();
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('iron-log-coach-v3')).sets.map(set => set.id))).toEqual(['unverified']);
 });

@@ -74,6 +74,7 @@
       !distinct(w.rows.map(row => row.id)))) return false;
     if (w.customExercises !== undefined && !validRoutineState({ version: 1, routines: [], favorites: [],
       customExercises: w.customExercises })) return false;
+    if (['ownedSetIds', 'skippedRows'].some(key => w[key] !== undefined && (!strings(w[key]) || !distinct(w[key])))) return false;
     if (w.extra !== undefined && (!record(w.extra) || !Object.values(w.extra).every(count => integer(count, 1, 1000)))) return false;
     if (w.drafts !== undefined && (!record(w.drafts) || !Object.values(w.drafts).every(draft => record(draft) &&
       (draft.weight === undefined || draft.weight === null || number(draft.weight, 0, Infinity)) &&

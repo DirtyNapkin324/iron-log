@@ -15,7 +15,74 @@
   let month = today().slice(0, 7);
   let lastMemoKey;
 
+  for (const button of document.querySelectorAll('[data-close-sheet]')) {
+    button.onclick = () => button.closest('dialog').close();
+  }
+  $('workoutOptions').onclick = () => showDialog($('workoutOptionsSheet'));
+  $('exerciseOptions').onclick = () => showDialog($('exerciseOptionsSheet'));
+  for (const [id, trigger] of [
+    ['exerciseSettingsSheet', 'exerciseOptions'],
+    ['exerciseNotesSheet', 'exerciseOptions'],
+    ['performanceSheet', 'exerciseOptions'],
+    ['workoutDetails', 'workoutOptions'],
+    ['cancelWorkoutSheet', 'workoutOptions'],
+  ])
+    $(id).addEventListener('close', () => {
+      if (!$(trigger).hidden && !document.querySelector('dialog[open]')) $(trigger).focus({ preventScroll: true });
+    });
+  function openExerciseSheet(id) {
+    $('exerciseOptionsSheet').close();
+    showDialog($(id));
+  }
+  $('exerciseSettingsOpen').onclick = () => openExerciseSheet('exerciseSettingsSheet');
+  $('exerciseNotesOpen').onclick = () => openExerciseSheet('exerciseNotesSheet');
+  $('performanceOpen').onclick = () => {
+    const groups = new Map();
+    for (const set of comparableHistory($('exercise').value, currentRow()).filter(isWorking)) {
+      const key = Training.sessionKey(set);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(set);
+    }
+    const cards = [...groups.values()]
+      .slice(-3)
+      .reverse()
+      .map((sets) => {
+        const card = el('div', '', 'performanceCard');
+        card.append(el('h3', displayDate(sets[0].date) + ' · ' + splitName(sets[0].split)));
+        const list = el('ol', '', 'performanceSets');
+        for (const set of sets)
+          list.append(
+            el('li', shownWeight(set.weight) + ' × ' + set.reps + (set.rir ? ' · ' + set.rir + ' RIR' : '')),
+          );
+        card.append(list);
+        return card;
+      });
+    $('performanceList').replaceChildren(
+      ...(cards.length ? cards : [el('p', 'No previous working sets for this exercise.', 'muted')]),
+    );
+    openExerciseSheet('performanceSheet');
+  };
+  $('skipExercise').addEventListener('click', () => $('exerciseOptionsSheet').close(), { capture: true });
+
+  function renderNavigation() {
+    const available = matchesActive() && !editing;
+    $('exerciseNavigation').hidden = !available;
+    const row = currentRow();
+    $('skipExercise').hidden = !available || !row || !exercisePending(row);
+    if (!available) return;
+    const next = upcomingExercise();
+    $('upNext').hidden = !next;
+    $('nextExercise').textContent = next ? 'Next exercise' : 'Finish workout';
+    if (next) {
+      const settings = rowSettings(next);
+      const range = settings.lo === settings.hi ? settings.lo : settings.lo + '–' + settings.hi;
+      $('upNextName').textContent = rowExercise(next).name;
+      $('upNextPlan').textContent = planCount(next) + ' sets · ' + range + ' reps';
+    }
+  }
+
   function planRows() {
+    renderNavigation();
     const row = matchesActive() && !editing && currentRow();
     const host = $('plannedSets');
     const submit = $('saveSet');
@@ -46,7 +113,12 @@
       const pending = !logged && i === completed.length;
       const priorText = previous ? shownWeight(previous.weight) + ' × ' + previous.reps : '—';
       line.dataset.current = String(pending);
-      line.insertCell().textContent = i + 1;
+      const index = line.insertCell();
+      index.textContent = logged ? '✓ ' + (i + 1) : i + 1;
+      if (logged) {
+        index.classList.add('completedSetIndex');
+        index.setAttribute('aria-label', 'Set ' + (i + 1) + ' complete');
+      }
       const previousCell = line.insertCell();
       previousCell.textContent = priorText;
       if (previous?.rir) previousCell.append(el('small', previous.rir + ' RIR'));
@@ -123,6 +195,7 @@
   };
 
   $('removeWorkingSet').onclick = () => {
+    $('exerciseOptionsSheet').close();
     const row = currentRow();
     if (!row || !matchesActive() || planCount(row) <= Math.max(1, setsForRow(row).filter(isWorking).length))
       return;
@@ -202,7 +275,22 @@
     };
     return form;
   }
+  let warmupContext, plateContext;
+  const calculatorContext = () => ({
+    session: active,
+    row: currentRow()?.id,
+    weight: selectedWeight(),
+    unit: weightUnit(),
+  });
+  const sameContext = (a, b) =>
+    a && b && a.session === b.session && a.row === b.row && a.weight === b.weight && a.unit === b.unit;
   $('warmupOpen').onclick = () => {
+    const context = calculatorContext();
+    if (sameContext(warmupContext, context)) {
+      showDialog($('warmupDialog'));
+      return;
+    }
+    warmupContext = context;
     const row = currentRow(),
       entry = workoutEntry(),
       weight = selectedWeight();
@@ -291,9 +379,13 @@
     }
   }
   $('platesOpen').onclick = () => {
-    $('plateUnit').value = weightUnit();
-    plateSettings();
-    $('plateTarget').value = weightInput(selectedWeight());
+    const context = calculatorContext();
+    if (!sameContext(plateContext, context)) {
+      $('plateUnit').value = weightUnit();
+      plateSettings();
+      $('plateTarget').value = weightInput(selectedWeight());
+    }
+    plateContext = context;
     drawPlates();
     showDialog($('platesDialog'));
   };
@@ -352,7 +444,10 @@
     $('workoutDetailsError').textContent = '';
     showDialog($('workoutDetails'));
   }
-  $('sessionOpen').onclick = () => workoutDetails(active);
+  $('sessionOpen').onclick = () => {
+    $('workoutOptionsSheet').close();
+    workoutDetails(active);
+  };
   $('workoutDetailsCancel').onclick = () => $('workoutDetails').close();
   $('workoutDetailsForm').onsubmit = (event) => {
     event.preventDefault();

@@ -422,6 +422,8 @@ function target() {
   $('exerciseTitle').textContent = name || 'Choose exercise';
   $('saveSet').disabled = !name;
   const row = currentRow();
+  $('exerciseOptions').hidden = !name || Boolean(editing);
+  $('applyTarget').disabled = !name || Boolean(editing);
   $('globalPrescription').hidden = Boolean(row?.config);
   $('routinePrescriptionNotice').hidden = !row?.config;
   $('substituteExercise').hidden = !matchesActive() || !row || Boolean(editing);
@@ -432,6 +434,7 @@ function target() {
   if (!name) {
     $('target').textContent = '—';
     $('setProgressText').textContent = '';
+    $('prescribedReps').textContent = '';
     $('setProgress').replaceChildren();
     $('recommendationWhy').textContent = '';
     return;
@@ -447,6 +450,9 @@ function target() {
   );
   $('setProgressText').textContent =
     done + ' of ' + (row ? planCount(row) : recommendation.count) + ' working sets';
+  $('prescribedReps').textContent =
+    (recommendation.lo === recommendation.hi ? recommendation.lo : recommendation.lo + '–' + recommendation.hi) +
+    ' reps';
   $('target').textContent =
     recommendation.weight === null
       ? 'Baseline × ' + recommendation.reps
@@ -530,6 +536,7 @@ function syncRoutineOptions() {
   else if (!trainingActive() && !manual && !editing && live.length) select.value = chooser.value;
   chooser.disabled = !live.length;
 }
+let queueWasActive = false;
 function renderTraining() {
   syncRoutineOptions();
   const split = $('split').value;
@@ -539,7 +546,11 @@ function renderTraining() {
   const available = routineById(split) && !routineById(split).archived && queue.length;
   $('trainingLog').hidden = !showLogger;
   $('workoutSetup').hidden = showLogger;
-  $('finishWorkout').hidden = !matchesActive() || !!editing;
+  const activeView = matchesActive() && !editing;
+  $('finishWorkout').hidden = $('workoutOptions').hidden = !activeView;
+  if (activeView !== queueWasActive) $('queueDisclosure').open = !activeView;
+  queueWasActive = activeView;
+  $('routineCard').classList.toggle('activeQueue', activeView);
   if (!editing && (manual || (trainingActive() && !matchesActive()))) {
     $('cancelEdit').textContent = trainingActive() ? 'Back to workout' : 'Close logger';
     $('cancelEdit').hidden = false;
@@ -565,14 +576,20 @@ function renderTraining() {
         el('span', name),
         el('span', done + '/' + planCount(row), 'planCount'),
       );
-      if (showLogger) item.onclick = () => chooseExercise(row, true);
+      if (showLogger)
+        item.onclick = () => {
+          if (activeView && active.skippedRows?.includes(row.id)) {
+            active.skippedRows = active.skippedRows.filter((id) => id !== row.id);
+          }
+          chooseExercise(row, true);
+        };
       if (showLogger && currentRow()?.id === row.id) item.setAttribute('aria-current', 'true');
       line.append(item);
       return line;
     }),
   );
   $('currentsets').replaceChildren(setTable(rows, { showExercise: true, repeat: true }));
-  activeUI();
+  activeUI(true);
   target();
   window.dispatchEvent(new Event('ironlog:training'));
 }
@@ -641,12 +658,45 @@ $('routineSelect').onchange = () => {
   renderTraining();
 };
 $('applyTarget').onclick = applyTarget;
-$('nextExercise').onclick = () => {
+function exerciseIncomplete(row) {
+  return setsForRow(row).filter(isWorking).length < planCount(row);
+}
+function exercisePending(row) {
+  return rowExercise(row) && !active?.skippedRows?.includes(row.id) && exerciseIncomplete(row);
+}
+function upcomingExercise() {
   const queue = workoutRows();
-  const i = queue.findIndex((row) => row.id === currentRow()?.id);
-  if (i + 1 < queue.length) chooseExercise(queue[i + 1]);
-  else toast('You reached the end of this routine.');
-};
+  const index = queue.findIndex((row) => row.id === currentRow()?.id);
+  return [...queue.slice(index + 1), ...queue.slice(0, Math.max(0, index))].find(exercisePending);
+}
+async function advanceExercise({ skip = false } = {}) {
+  if (!matchesActive() || editing) return;
+  const session = active;
+  const row = currentRow();
+  const next = upcomingExercise();
+  if (!skip && !next) {
+    $('finishWorkout').click();
+    return;
+  }
+  if (row && exercisePending(row)) {
+    if (
+      !(await confirmAction(
+        'Leave the remaining working sets for this exercise unlogged?',
+        'Skip remaining sets',
+        'Skip exercise?',
+      )) ||
+      active !== session
+    )
+      return;
+    active.skippedRows ||= [];
+    active.skippedRows.push(row.id);
+    persistActive();
+  }
+  if (next) chooseExercise(next, true);
+  else renderTraining();
+}
+$('nextExercise').onclick = () => advanceExercise();
+$('skipExercise').onclick = () => advanceExercise({ skip: true });
 
 function logSet(
   { weight, reps, rir = '', notes = '', kind = 'working', failed = false, partials = 0 },
@@ -685,7 +735,11 @@ function logSet(
     partials,
   };
   if (live && active.id) item.workoutId = active.id;
-  else if (old && (old.date !== item.date || old.split !== item.split)) delete item.workoutId;
+  else if (live) {
+    active.ownedSetIds ||= [];
+    active.ownedSetIds.push(item.id);
+    persistActive();
+  } else if (old && (old.date !== item.date || old.split !== item.split)) delete item.workoutId;
   if (row) {
     item.exerciseId = row.exerciseId;
     item.routineRowId = row.id;
@@ -738,7 +792,7 @@ function logSet(
   if (!options.preserveInput) applyTarget();
   const queue = workoutRows();
   const position = queue.findIndex((candidate) => candidate.id === row?.id);
-  const unfinished = (candidate) => setsForRow(candidate).filter(isWorking).length < planCount(candidate);
+  const unfinished = exercisePending;
   let next,
     paired = false;
   if (live && position >= 0 && isWorking(item)) {
@@ -784,11 +838,26 @@ $('log').onsubmit = (event) => {
   });
 };
 
-function activeUI() {
-  const min = matchesActive() ? Math.max(0, Math.floor((Date.now() - active.started) / 60000)) : 0;
-  $('activeWorkoutInfo').textContent = matchesActive()
-    ? (active.name || splitName(active.split)) + ' · ' + min + ' min'
-    : 'Set logger';
+function activeUI(updateProgress = false) {
+  const isActive = matchesActive() && !editing;
+  $('workoutProgress').hidden = $('workoutPosition').hidden = !isActive;
+  $('activeWorkoutInfo').textContent = isActive ? active.name || splitName(active.split) : 'Set logger';
+  if (!isActive) return;
+  const seconds = Math.max(0, Math.floor((Date.now() - active.started) / 1000));
+  const elapsed = Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2, '0');
+  const queue = workoutRows();
+  const index = queue.findIndex((row) => row.id === currentRow()?.id);
+  $('workoutPosition').textContent =
+    elapsed + (index >= 0 ? ' · Exercise ' + (index + 1) + ' of ' + queue.length : '');
+  if (!updateProgress) return;
+  const counts = queue
+    .filter((row) => rowExercise(row))
+    .map((row) => [planCount(row), Math.min(planCount(row), setsForRow(row).filter(isWorking).length)]);
+  $('workoutProgress').max = Math.max(
+    1,
+    counts.reduce((total, [planned]) => total + planned, 0),
+  );
+  $('workoutProgress').value = counts.reduce((total, [, completed]) => total + completed, 0);
 }
 function persistActive() {
   try {
@@ -836,11 +905,95 @@ $('beginWorkout').onclick = () => {
   resumeWorkout();
   $('exerciseTitle').scrollIntoView({ block: 'nearest' });
 };
+function workoutRecord(session, finished = Date.now()) {
+  return {
+    id: session.id || session.date + ' ' + session.split,
+    date: session.date,
+    split: session.split,
+    name: session.name || splitName(session.split),
+    started: session.started,
+    finished: Math.max(session.started, finished),
+    notes: session.notes || '',
+  };
+}
+function ownedWorkoutSets(session) {
+  if (session.id) return data.sets.filter((set) => set.workoutId === session.id);
+  const ids = new Set(session.ownedSetIds || []);
+  return data.sets.filter((set) => !set.workoutId && ids.has(set.id));
+}
+function closeCancelledWorkout(session, discard = false) {
+  if (!session || active !== session) return;
+  const owned = ownedWorkoutSets(session);
+  const next = { ...data };
+  if (discard) {
+    const matches = new Set(owned);
+    next.sets = data.sets.filter((set) => !matches.has(set));
+    if (session.id) next.workouts = data.workouts.filter((workout) => workout.id !== session.id);
+  } else if (session.id && owned.length) {
+    next.workouts = [...data.workouts.filter((workout) => workout.id !== session.id), workoutRecord(session)];
+  }
+  try {
+    IronCore.writeBackup(localStorage, { workout: next, activeSession: null });
+  } catch {
+    toast('Could not save the cancellation. Your workout is still active.');
+    return;
+  }
+  data = next;
+  active = null;
+  undoItem = null;
+  lastSubmitKey = '';
+  $('cancelWorkoutSheet').close();
+  restDuration = restartDuration = 0;
+  $('barstop').click();
+  exitManual();
+  render();
+  toast(
+    discard
+      ? 'Workout and its logged sets discarded'
+      : owned.length
+        ? 'Workout cancelled. Sets kept.'
+        : 'Workout cancelled',
+  );
+  window.dispatchEvent(new Event('ironlog:saved'));
+  $('beginWorkout').focus();
+}
+$('cancelWorkout').onclick = () => {
+  if (!matchesActive()) return;
+  $('workoutOptionsSheet').close();
+  const session = active;
+  const owned = ownedWorkoutSets(session);
+  const legacy = !session.id && sessionSets(session.date, session.split).some((set) => !owned.includes(set));
+  if (!owned.length && !legacy) {
+    closeCancelledWorkout(session);
+    return;
+  }
+  $('cancelWorkoutMessage').textContent = legacy
+    ? 'Older sets without a verified session link will be kept.'
+    : owned.length + (owned.length === 1 ? ' set is' : ' sets are') + ' logged in this workout.';
+  $('cancelDiscard').hidden = !owned.length;
+  showDialog($('cancelWorkoutSheet'));
+};
+$('cancelKeep').onclick = () => closeCancelledWorkout(active);
+$('cancelDiscard').onclick = async () => {
+  const session = active;
+  if (!session || !ownedWorkoutSets(session).length) return;
+  if (
+    await confirmAction(
+      'Permanently remove the sets linked to this workout?',
+      'Discard logged sets',
+      'Discard logged sets?',
+    )
+  )
+    closeCancelledWorkout(session, true);
+};
+
 $('finishWorkout').onclick = async () => {
   if (!matchesActive()) return;
   if (
     !(await confirmAction(
-      'Finish this training session and see your results?',
+      workoutRows().some(exercisePending)
+        ? 'Some working sets are still open. Finish this workout and keep the sets you logged?'
+        : 'Finish this training session and see your results?',
       'Finish workout',
       'Finish workout?',
     ))
@@ -849,17 +1002,8 @@ $('finishWorkout').onclick = async () => {
   const sets = sessionSets(active.date, active.split);
   const finished = Date.now();
   const minutes = Math.max(0, Math.floor((finished - active.started) / 60000));
-  const id = active.id || active.date + ' ' + active.split;
-  const workout = {
-    id,
-    date: active.date,
-    split: active.split,
-    name: active.name || splitName(active.split),
-    started: active.started,
-    finished,
-    notes: active.notes || '',
-  };
-  data.workouts = [...data.workouts.filter((item) => item.id !== id), workout];
+  const workout = workoutRecord(active, finished);
+  data.workouts = [...data.workouts.filter((item) => item.id !== workout.id), workout];
   $('summarySplit').textContent = (active.name || splitName(active.split)) + ' · ' + displayDate(active.date);
   $('summaryMetrics').replaceChildren(
     metric(sets.filter(isWorking).length, 'Working sets'),
@@ -995,14 +1139,9 @@ function renderHistory() {
   historyRecords = Training.records(regular(), exerciseIdentity).markers;
   const history = $('history');
   const open = new Set([...history.querySelectorAll('details[open]')].map((card) => card.dataset.session));
-  const filter = $('filter').value;
   const search = norm($('searchHistory').value);
   const groups = new Map();
-  const sets = data.sets
-    .filter(
-      (set) => filter === 'All' || (set.split === 'Fitness assignment') === (filter === 'Fitness assignment'),
-    )
-    .sort((a, b) => b.date.localeCompare(a.date) || a.id.localeCompare(b.id));
+  const sets = [...data.sets].sort((a, b) => b.date.localeCompare(a.date) || a.id.localeCompare(b.id));
   for (const set of sets) {
     const key = Training.sessionKey(set);
     if (!groups.has(key)) groups.set(key, []);
@@ -1019,7 +1158,6 @@ function renderHistory() {
     const info = metadata.get(key);
     const { date, split } = info || workout[0];
     if (calendarDay && date !== calendarDay) continue;
-    if ((split === 'Fitness assignment') !== (filter === 'Fitness assignment') && filter !== 'All') continue;
     if (
       search &&
       !norm([date, info?.name, info?.notes, splitName(split)].filter(Boolean).join(' ')).includes(search) &&
@@ -1069,7 +1207,12 @@ function renderHistory() {
   if (!cards.length) {
     const empty = el('div', '', 'panel empty');
     empty.append(
-      el('p', data.sets.length ? 'No workouts match these filters.' : 'Your first workout will appear here.'),
+      el(
+        'p',
+        data.sets.length
+          ? 'No workouts match your search or selected date.'
+          : 'Your first workout will appear here.',
+      ),
     );
     if (!data.sets.length) {
       const start = el('button', 'Go to Train', 'primary');
@@ -1081,7 +1224,6 @@ function renderHistory() {
   history.replaceChildren(...cards);
   window.TrainingUI?.calendar();
 }
-$('filter').onchange = renderHistory;
 $('searchHistory').oninput = renderHistory;
 
 function inRange(date, range) {
@@ -1759,6 +1901,6 @@ $('headerDate').textContent = displayDate(today(), { weekday: 'short', month: 's
 if (trainingActive()) resumeWorkout();
 render();
 updateConnectivity();
-setInterval(activeUI, 15000);
+setInterval(activeUI, 1000);
 if ('serviceWorker' in navigator && window.isSecureContext)
   navigator.serviceWorker.register('./sw.js').catch(console.warn);

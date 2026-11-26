@@ -10,14 +10,14 @@
   <title>Iron Log</title>
   <link rel="manifest" href="manifest.webmanifest?v=56">
   <link rel="apple-touch-icon" href="apple-touch-icon.png?v=56">
-  <link rel="stylesheet" href="app.css?v=57">
-  <script defer src="iron-core.js?v=57"></script>
+  <link rel="stylesheet" href="app.css?v=58">
+  <script defer src="iron-core.js?v=58"></script>
   <script defer src="exercise-library.js?v=55"></script>
   <script defer src="routine-builder.js?v=55"></script>
   <script defer src="training-core.js?v=57"></script>
-  <script defer src="app.js?v=57"></script>
-  <script defer src="routine-ui.js?v=57"></script>
-  <script defer src="training-ui.js?v=57"></script>
+  <script defer src="app.js?v=58"></script>
+  <script defer src="routine-ui.js?v=58"></script>
+  <script defer src="training-ui.js?v=58"></script>
   <script defer src="social.js?v=57"></script>
 </head>
 <body>
@@ -47,15 +47,23 @@
           </details>
         </div>
         <div class="panel" id="trainingLog" hidden>
-          <div class="sectionLine"><span class="kicker" id="activeWorkoutInfo"></span><button type="button" id="finishWorkout" class="quiet" hidden>Finish</button></div>
+          <header class="workoutHeader">
+            <div class="workoutHeaderText"><strong id="activeWorkoutInfo"></strong><span id="workoutPosition" class="small muted"></span></div>
+            <button type="button" id="finishWorkout" class="primary" hidden>Finish</button>
+            <button type="button" id="workoutOptions" class="iconButton secondary" aria-label="Workout options" aria-haspopup="dialog" hidden>•••</button>
+            <progress id="workoutProgress" aria-label="Workout progress" max="1" value="0" hidden></progress>
+          </header>
           <div id="logtitle" class="muted"></div>
-          <h2 id="exerciseTitle" class="exerciseTitle">Choose exercise</h2>
+          <div class="exerciseHeading">
+            <h2 id="exerciseTitle" class="exerciseTitle">Choose exercise</h2>
+            <button type="button" id="exerciseOptions" class="iconButton secondary" aria-label="Exercise options" aria-haspopup="dialog" hidden>•••</button>
+          </div>
           <p id="exerciseInstructions" class="muted small" hidden></p>
           <div id="setProgress" class="setProgress" aria-hidden="true"></div>
-          <div id="setProgressText" class="small muted"></div>
+          <div class="exerciseStatus"><span id="setProgressText" class="small muted"></span><span id="prescribedReps" class="small muted"></span></div>
           <div class="comparison">
             <div><span class="kicker">Previous</span><strong id="last">—</strong></div>
-            <div><span class="kicker">Recommended</span><strong id="target">—</strong></div>
+            <div class="recommendation"><div><span class="kicker">Recommended</span><strong id="target">—</strong></div><button type="button" id="applyTarget" class="secondary" aria-label="Apply recommendation">Apply</button></div>
           </div>
           <form id="log">
             <div class="fields three loggerFields">
@@ -65,10 +73,17 @@
             </div>
             <div id="plannedSets" hidden></div>
             <div id="setSubmitHome"><button type="submit" id="saveSet" class="primary full">Log set</button></div>
+          <div id="liftTools" hidden>
+            <div class="setActions">
+              <button type="button" id="addWorkingSet" class="quiet">+ Add set</button>
+              <button type="button" id="undoSet" class="quiet" hidden>Undo set</button>
+            </div>
+            <div class="calculatorActions">
+              <button type="button" id="warmupOpen" class="secondary" aria-haspopup="dialog"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M13 3 5 14h6l-1 7 9-11h-6l1-7Z"/></svg>Warm-up</button>
+              <button type="button" id="platesOpen" class="secondary" aria-haspopup="dialog" hidden><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M2 12h20M5 8v8m3-11v14m8-14v14m3-11v8"/></svg>Plates</button>
+            </div>
+          </div>
             <div class="actions loggerActions">
-              <button type="button" id="applyTarget" class="quiet">Use recommendation</button>
-              <button type="button" id="nextExercise" class="quiet">Next exercise</button>
-              <button type="button" id="substituteExercise" class="quiet" hidden>Swap for today</button>
               <button type="button" id="cancelEdit" class="quiet" hidden>Cancel edit</button>
             </div>
             <details class="disclosure" id="setDetails">
@@ -87,38 +102,17 @@
               <label>Notes<input id="notes" placeholder="Tempo or form cues"></label>
             </details>
           </form>
-          <div class="actions" id="liftTools" hidden>
-            <button id="undoSet" class="quiet" hidden>Undo set</button>
-            <button id="addWorkingSet" class="quiet">Add working set</button>
-            <button id="removeWorkingSet" class="quiet">Remove planned set</button>
-            <button id="warmupOpen" class="quiet">Warm-ups</button>
-            <button id="platesOpen" class="quiet" hidden>Plates</button>
-            <button id="sessionOpen" class="quiet">Workout details</button>
-          </div>
-          <details class="disclosure" id="exerciseNotesPanel"><summary>Exercise notes</summary>
-            <label>Notes for future workouts<textarea id="exerciseMemo" rows="2" maxlength="2000"></textarea></label><button id="saveExerciseMemo" class="secondary">Save note</button>
-          </details>
-          <details class="disclosure">
-            <summary>Exercise settings</summary>
-            <p class="muted" id="recommendationWhy"></p>
-            <p id="routinePrescriptionNotice" class="muted small" hidden>This exercise uses the routine prescription. Use Edit routine to make changes for your next workout.</p>
-            <div id="globalPrescription">
-            <div class="fields three">
-              <label>Working sets<input id="cfgSets" type="number" min="1" max="10"></label>
-              <label>Min reps<input id="cfgLo" type="number" min="1" max="30"></label>
-              <label>Max reps<input id="cfgHi" type="number" min="1" max="30"></label>
-              <label><span class="unitIncrement">Increment (lb)</span><input id="cfgStep" type="number" min="0" step="any"></label>
-              <label>Rest (sec)<input id="cfgRest" type="number" min="15" max="600"></label>
-            </div>
-            <div class="actions"><button id="cfgSave" class="secondary">Save settings</button><button id="cfgReset" class="quiet">Reset</button></div>
-            </div>
-          </details>
+
+        </div>
+        <div id="exerciseNavigation" hidden>
+          <div id="upNext" class="upNext" hidden><span class="kicker">Up next</span><strong id="upNextName"></strong><span id="upNextPlan" class="small muted"></span></div>
+          <button type="button" id="nextExercise" class="primary full">Next exercise</button>
         </div>
       </div>
       <div class="trainingAside">
         <div id="routineCard" class="panel">
           <div class="sectionLine"><h2 id="routineHeading">Workout plan</h2><button id="editRoutine" class="quiet">Edit routine</button></div>
-          <div id="coachplan" class="list"></div>
+          <details id="queueDisclosure" open><summary>Show exercise queue</summary><div id="coachplan" class="list"></div></details>
         </div>
         <div id="completedCard" class="panel" hidden>
           <div class="sectionLine"><h2>Logged sets</h2><span id="sessionstats" class="muted small"></span></div>
@@ -139,9 +133,8 @@
       <div id="calendarMetrics" class="small muted"></div><div id="calendarGrid" class="calendarGrid"></div>
       <button id="clearCalendarDay" class="secondary" hidden>Show all dates</button>
     </details>
-    <div class="panel fields historyFilters">
+    <div class="panel">
       <label>Search workouts<input type="search" id="searchHistory" placeholder="Exercise, date or split"></label>
-      <label>Workout type<select id="filter"><option>Regular training</option><option>Fitness assignment</option><option>All</option></select></label>
     </div>
     <div id="history" class="historyList"></div>
   </section>
@@ -261,7 +254,7 @@
       <label class="settingRow switchRow">Rest timer sound<input type="checkbox" id="restSound" class="switch" role="switch"></label>
       <label class="settingRow switchRow">Rest timer vibration<input type="checkbox" id="restVibration" class="switch" role="switch"></label>
       <p class="small muted">Alerts require the app to be running. iOS can suspend timers in the background, and vibration depends on device support.</p>
-      <div class="settingRow version">App version <span>5.5</span></div>
+      <div class="settingRow version">App version <span>5.5.1</span></div>
     </div>
   </section>
 </main>
@@ -272,7 +265,11 @@
   <button data-tab="social" ><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2C9 7 5 11 5 15a7 7 0 0 0 14 0c0-4-4-8-7-13Z"/></svg><span>Hydration</span></button>
   <button data-tab="settings" ><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/></svg><span>Profile</span></button>
   </nav>
-<div id="timerbar" hidden><span>Rest</span><strong id="barclock">03:00</strong><progress id="restProgress" aria-label="Rest countdown" value="0" max="1"></progress><button id="barpause" class="secondary">Pause</button><button id="barExtend" class="quiet">+15</button><button id="barstop" class="quiet">Skip</button></div>
+<div id="timerbar" aria-label="Rest timer" hidden>
+  <div class="timerReadout"><span>Rest</span><strong id="barclock">03:00</strong></div>
+  <button id="barpause" class="secondary">Pause</button><button id="barExtend" class="quiet" aria-label="Extend rest by 15 seconds">+15</button><button id="barstop" class="quiet">Skip</button>
+  <progress id="restProgress" aria-label="Rest countdown" value="0" max="1"></progress>
+</div>
 <div id="toast" role="status" aria-live="polite"></div>
 <dialog id="confirmation" aria-labelledby="confirmTitle" aria-describedby="confirmMessage">
   <form method="dialog">
@@ -336,12 +333,68 @@
     <div class="sheetFooter"><p id="exerciseFormStatus" class="small destructive" role="status"></p><button class="primary full">Save exercise</button></div>
   </form>
 </dialog>
-<dialog id="warmupDialog" class="builderSheet" aria-labelledby="warmupTitle">
+<dialog id="workoutOptionsSheet" class="actionSheet" aria-labelledby="workoutOptionsTitle">
+  <div class="sheetHeader"><h2 id="workoutOptionsTitle">Workout options</h2><button class="quiet" data-close-sheet autofocus>Done</button></div>
+  <div class="optionList">
+    <button id="sessionOpen" class="settingRow">Workout details and notes</button>
+    <button id="cancelWorkout" class="settingRow destructive">Cancel workout</button>
+  </div>
+</dialog>
+<dialog id="exerciseOptionsSheet" class="actionSheet" aria-labelledby="exerciseOptionsTitle">
+  <div class="sheetHeader"><h2 id="exerciseOptionsTitle">Exercise options</h2><button class="quiet" data-close-sheet autofocus>Done</button></div>
+  <div class="optionList">
+    <button id="substituteExercise" class="settingRow" hidden>Swap for today</button>
+    <button id="exerciseSettingsOpen" class="settingRow">Exercise settings</button>
+    <button id="exerciseNotesOpen" class="settingRow">Exercise notes</button>
+    <button id="performanceOpen" class="settingRow">Previous performances</button>
+    <button id="removeWorkingSet" class="settingRow">Remove planned set</button>
+    <button id="skipExercise" class="settingRow">Skip exercise</button>
+  </div>
+</dialog>
+<dialog id="exerciseSettingsSheet" class="actionSheet" aria-labelledby="exerciseSettingsTitle">
+  <div class="sheetHeader"><h2 id="exerciseSettingsTitle">Exercise settings</h2><button class="quiet" data-close-sheet autofocus>Done</button></div>
+  <div class="optionList">
+            <p class="muted" id="recommendationWhy"></p>
+            <p id="routinePrescriptionNotice" class="muted small" hidden>This exercise uses the routine prescription. Use Edit routine to make changes for your next workout.</p>
+            <div id="globalPrescription">
+            <div class="fields three">
+              <label>Working sets<input id="cfgSets" type="number" min="1" max="10"></label>
+              <label>Min reps<input id="cfgLo" type="number" min="1" max="30"></label>
+              <label>Max reps<input id="cfgHi" type="number" min="1" max="30"></label>
+              <label><span class="unitIncrement">Increment (lb)</span><input id="cfgStep" type="number" min="0" step="any"></label>
+              <label>Rest (sec)<input id="cfgRest" type="number" min="15" max="600"></label>
+            </div>
+            <div class="actions"><button id="cfgSave" class="secondary">Save settings</button><button id="cfgReset" class="quiet">Reset</button></div>
+            </div>
+
+  </div>
+</dialog>
+<dialog id="exerciseNotesSheet" class="actionSheet" aria-labelledby="exerciseNotesTitle">
+  <div class="sheetHeader"><h2 id="exerciseNotesTitle">Exercise notes</h2><button class="quiet" data-close-sheet autofocus>Done</button></div>
+  <div id="exerciseNotesPanel" class="optionList">
+            <label>Notes for future workouts<textarea id="exerciseMemo" rows="2" maxlength="2000"></textarea></label><button id="saveExerciseMemo" class="secondary">Save note</button>
+
+  </div>
+</dialog>
+<dialog id="performanceSheet" class="actionSheet" aria-labelledby="performanceTitle">
+  <div class="sheetHeader"><h2 id="performanceTitle">Previous performances</h2><button class="quiet" data-close-sheet autofocus>Done</button></div>
+  <div id="performanceList" class="optionList"></div>
+</dialog>
+<dialog id="cancelWorkoutSheet" class="actionSheet" aria-labelledby="cancelWorkoutTitle" aria-describedby="cancelWorkoutMessage">
+  <div class="sheetHeader"><h2 id="cancelWorkoutTitle">Cancel workout?</h2></div>
+  <div class="optionList">
+    <p id="cancelWorkoutMessage" class="muted"></p>
+    <button id="continueWorkout" class="primary full" data-close-sheet autofocus>Continue workout</button>
+    <button id="cancelKeep" class="settingRow">Cancel and keep logged sets</button>
+    <button id="cancelDiscard" class="settingRow destructive">Discard workout and sets</button>
+  </div>
+</dialog>
+<dialog id="warmupDialog" class="builderSheet calculatorSheet" aria-labelledby="warmupTitle">
   <div class="sheetHeader"><h2 id="warmupTitle">Warm-up sets</h2><button id="warmupClose" class="quiet">Done</button></div>
   <div class="sheetScroll"><p id="warmupHint" class="small muted"></p><div id="warmupRows"></div></div>
   <div class="sheetFooter"><button id="warmupAdd" class="secondary full">Add warm-up set</button></div>
 </dialog>
-<dialog id="platesDialog" class="builderSheet" aria-labelledby="platesTitle">
+<dialog id="platesDialog" class="builderSheet calculatorSheet" aria-labelledby="platesTitle">
   <div class="sheetHeader"><h2 id="platesTitle">Plate calculator</h2><button id="platesClose" class="quiet">Done</button></div>
   <div class="sheetScroll">
     <div class="fields"><label>Target<input id="plateTarget" type="number" min="0" step="any"></label><label>Bar weight<input id="plateBar" type="number" min="0" max="100" step=".01"></label></div>
