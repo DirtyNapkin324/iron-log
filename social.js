@@ -14,7 +14,7 @@
     catch { return false; }
     return true;
   };
-  const say = text => { $('socialStatus').textContent = text; };
+  const say = text => { $('socialStatus').textContent = text; $('profileStatus').textContent = text; };
   const guarded = fn => async () => { try { await fn(); } catch (error) { say(error.message); } };
   const groupKey = id => 'iron-log-hydration-group-' + id;
   const sessionData = value => value && value.refresh_token && value.user?.id ? value : null;
@@ -122,6 +122,10 @@
   function updateIdentity() {
     $('socialLogin').hidden = !!auth;
     $('socialMember').hidden = !auth;
+    $('profileMember').hidden = !auth;
+    $('profileCloud').hidden = !auth;
+    $('cloudGuest').hidden = !!auth;
+    $('hydrationGuest').hidden = !!auth;
     const username = auth?.user.user_metadata?.username;
     $('socialIdentity').textContent = username ? 'Signed in as ' + username : 'Signed in to Iron Log';
     $('socialName').value = username || '';
@@ -723,6 +727,7 @@
     }
   });
 
+  $('openProfile').onclick = () => tab('settings');
   updateIdentity();
   if (auth) restorePendingBackup(auth.user.id);
   cloudUI();
