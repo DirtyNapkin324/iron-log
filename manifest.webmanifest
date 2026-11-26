@@ -1,0 +1,18 @@
+{
+  "id": "./",
+  "name": "Iron Log – Workout Coach",
+  "short_name": "Iron Log",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0c1015",
+  "theme_color": "#0c1015",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
