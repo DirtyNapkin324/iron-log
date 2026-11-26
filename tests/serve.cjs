@@ -5,6 +5,8 @@ const root = resolve(__dirname, '..');
 const assets = {
   'index.html': 'text/html; charset=utf-8',
   'social.js': 'text/javascript',
+  'app.js': 'text/javascript',
+  'app.css': 'text/css',
   'iron-core.js': 'text/javascript',
   'sw.js': 'text/javascript',
   'manifest.webmanifest': 'application/manifest+json',

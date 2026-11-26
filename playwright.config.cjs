@@ -7,7 +7,8 @@ module.exports = defineConfig({
   use: { baseURL: 'http://127.0.0.1:4173', timezoneId: 'America/New_York' },
   projects: [
     { name: 'Chromium', use: { browserName: 'chromium' } },
-    { name: 'Mobile WebKit', use: { ...devices['iPhone 13'], browserName: 'webkit' } }
+    { name: 'Mobile WebKit', use: { ...devices['iPhone 13'], browserName: 'webkit' } },
+    { name: 'Compact WebKit', grep: /six tabs/, use: { ...devices['iPhone 13'], browserName: 'webkit', viewport: { width: 320, height: 568 } } }
   ],
   webServer: {
     command: 'node tests/serve.cjs',

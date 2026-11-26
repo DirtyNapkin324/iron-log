@@ -21,8 +21,11 @@ const makeSession = () => ({
   user: { id: user, user_metadata: { username: 'Lifter' } }
 });
 
-function acceptDialogs(page) {
-  page.on('dialog', dialog => dialog.accept());
+const confirm = page => page.locator('#confirmAction').click();
+async function editRoutine(page, name) {
+  await page.locator('#editRoutine').click();
+  await page.getByRole('textbox', { name: 'Exercise 2', exact: true }).fill(name);
+  await page.locator('#saveRoutine').click();
 }
 
 const tab = (page, name) => page.locator('[data-tab="' + name + '"]').click();
@@ -126,28 +129,28 @@ test('workout sets, body weight, timer and routines survive reload', async ({ pa
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto('/');
-  await page.getByText('Customize routine', { exact: true }).click();
-  await page.locator('#routineText').fill('Bench press\nWeighted dips');
-  await page.locator('#saveRoutine').click();
+  await editRoutine(page, 'Weighted dips');
   await page.locator('#beginWorkout').click();
-  await page.locator('#exercise').fill('Bench press');
+  await expect(page.locator('#exerciseTitle')).toHaveText('Bench press');
   await page.locator('#weight').fill('110');
   await page.locator('#reps').fill('5');
+  await page.locator('#setDetails summary').click();
   await page.locator('#notes').fill('first working set');
   await page.locator('#saveSet').click();
   await expect(page.locator('#sessionstats')).toContainText('1 sets');
-  await page.locator('[data-rest]').first().click();
   await page.locator('#barpause').click();
   await expect(page.locator('#barpause')).toHaveText('Resume');
   await tab(page, 'body');
   await page.locator('#bodyweight').fill('167.5');
   await page.locator('#bodyform button').click();
-  await expect(page.locator('#bodyhistory')).toContainText('167.5 lb');
+  await expect(page.locator('#bw')).toHaveText('167.5 lb');
+  await expect(page.locator('#bodyChart')).toBeVisible();
   await page.reload();
   await expect(page.locator('#barpause')).toHaveText('Resume');
   await expect(page.locator('#coachplan')).toContainText('Weighted dips');
   await tab(page, 'history');
-  await expect(page.locator('#history')).toContainText('first working set');
+  await page.locator('.workoutCard summary').first().click();
+  await expect(page.locator('#history').getByText('first working set')).toBeVisible();
   await page.locator('#history').getByRole('button', { name: 'Edit' }).click();
   await expect(page.locator('#saveSet')).toHaveText('Update set');
   await page.locator('#weight').fill('115');
@@ -158,13 +161,14 @@ test('workout sets, body weight, timer and routines survive reload', async ({ pa
 });
 
 test('local import and export include settings and accept legacy backups', async ({ page }) => {
-  acceptDialogs(page);
   await page.goto('/');
   await tab(page, 'settings');
   const restore = value => page.locator('#file').setInputFiles({
     name: 'backup.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(value))
   });
+  await page.locator('#localBackups summary').click();
   await restore(backup);
+  await confirm(page);
   await expect(page.locator('#status')).toHaveText('Backup restored on this device.');
   const downloadReady = page.waitForEvent('download');
   await page.locator('#export').click();
@@ -172,6 +176,7 @@ test('local import and export include settings and accept legacy backups', async
   const exported = JSON.parse(await readFile(await download.path(), 'utf8'));
   expect(exported).toMatchObject(backup);
   await restore({ sets: [], body: [] });
+  await confirm(page);
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('iron-log-coach-v3')).sets)).toEqual([]);
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('iron-log-exercise-config-v1')))).toEqual(backup.exerciseConfig);
   await tab(page, 'workout');
@@ -180,13 +185,13 @@ test('local import and export include settings and accept legacy backups', async
 
 test('hydration works before joining and refreshes friends on a Realtime event', async ({ page }) => {
   const cloud = await fakeCloud(page);
-  acceptDialogs(page);
   await page.goto('/');
   await tab(page, 'social');
   await expect(page.locator('#waterTotal')).toHaveText('0 / 64 oz');
   await expect(page.locator('#socialList')).toBeDisabled();
   await page.locator('[data-water="24"]').click();
   await expect(page.locator('#waterTotal')).toHaveText('24 / 64 oz');
+  await page.getByText('Hydration preferences', { exact: true }).click();
   await page.locator('#waterGoal').fill('24');
   await page.locator('#waterSaveGoal').click();
   await expect(page.locator('#waterStreak')).toContainText('Goal streak: 1 day');
@@ -194,20 +199,22 @@ test('hydration works before joining and refreshes friends on a Realtime event',
   await page.locator('#socialTitle').fill('Water friends');
   await page.locator('#socialCreate').click();
   await expect(page.locator('#socialList')).toHaveValue(groupId);
-  await expect(page.locator('#socialBoard')).toContainText('Friend · 8 / 64 oz');
+  await expect(page.locator('#socialBoard')).toContainText('8 / 64 oz');
   await expect.poll(() => page.evaluate(id => window.testRealtimeChanges?.some(change =>
     change.table === 'hydration_daily' && change.filter === 'group_id=eq.' + id), groupId)).toBe(true);
   cloud.friendTotal = 28;
   await page.evaluate(() => window.notifyRealtime());
-  await expect(page.locator('#socialBoard')).toContainText('Friend · 28 / 64 oz', { timeout: 5000 });
+  await expect(page.locator('#socialBoard')).toContainText('28 / 64 oz', { timeout: 5000 });
   await page.getByText('Manage membership', { exact: true }).click();
   await page.locator('#renameTitle').fill('New group title');
   await page.locator('#renameGroup').click();
   await expect(page.locator('#socialList option')).toHaveText('New group title');
   await page.locator('#manageMember').selectOption(friend);
   await page.locator('#transferGroup').click();
+  await confirm(page);
   await expect(page.locator('#ownerTools')).toBeHidden();
   await page.locator('#leaveGroup').click();
+  await confirm(page);
   await expect(page.locator('#socialList')).toBeDisabled();
   await expect(page.locator('#waterTotal')).toHaveText('24 / 24 oz');
 });
@@ -216,11 +223,14 @@ test('recovery needs only the code and shows a new one after success', async ({ 
   const cloud = await fakeCloud(page, false);
   await page.goto('/');
   await tab(page, 'social');
+  await expect(page.getByRole('button', { name: 'Recover membership' })).toHaveCount(0);
+  await page.locator('#openProfile').click();
+  await expect(page.locator('#pageLabel')).toHaveText('Profile');
   await page.getByText('Recover a membership', { exact: true }).click();
   await page.locator('#recoverCode').fill(code.match(/.{4}/g).join('-').toUpperCase());
   await page.locator('#recoverMembership').click();
   await expect(page.locator('#issuedCode')).toHaveValue('abcd-abcd-abcd-abcd-abcd-abcd-abcd-abcd');
-  await expect(page.locator('#socialStatus')).toContainText('Membership recovered');
+  await expect(page.locator('#profileStatus')).toContainText('Membership recovered');
   expect(cloud.requests.find(request => request.path === 'signup').args).toEqual({ data: { username: '' } });
   expect(cloud.requests.find(request => request.path === 'recover_membership')).toMatchObject({ args: { code }, token: 'Bearer test-token' });
   expect(await page.evaluate(() => localStorage.getItem('iron-log-social-recovery-session-v1'))).toBeNull();
@@ -229,27 +239,27 @@ test('recovery needs only the code and shows a new one after success', async ({ 
 });
 
 test('cloud saves use a version, restore settings, and stop auto backup on conflict', async ({ page }) => {
-  acceptDialogs(page);
   const cloud = await fakeCloud(page);
   cloud.payload = backup;
   cloud.version = '2025-01-01T00:00:00+00:00';
   await page.goto('/');
-  await tab(page, 'social');
+  await tab(page, 'settings');
   await page.locator('#socialRestore').click();
-  await expect(page.locator('#socialStatus')).toHaveText('Cloud backup restored.');
+  await confirm(page);
+  await expect(page.locator('#profileStatus')).toHaveText('Cloud backup restored.');
   await page.locator('#socialBackup').click();
-  await expect(page.locator('#socialStatus')).toHaveText('Cloud backup saved.');
+  await confirm(page);
+  await expect(page.locator('#profileStatus')).toHaveText('Cloud backup saved.');
   expect(cloud.requests.find(request => request.path === 'save_workout_backup').args).toMatchObject({
     expected: '2025-01-01T00:00:00+00:00', snapshot: backup
   });
   await tab(page, 'settings');
   await page.locator('#autoCloud').check();
+  await confirm(page);
   await expect(page.locator('#autoCloudStatus')).toContainText('Automatic backups on.');
   cloud.conflict = true;
   await tab(page, 'workout');
-  await page.getByText('Customize routine', { exact: true }).click();
-  await page.locator('#routineText').fill('Bench press\nFace pull');
-  await page.locator('#saveRoutine').click();
+  await editRoutine(page, 'Face pull');
   await tab(page, 'settings');
   await expect(page.locator('#autoCloudStatus')).toContainText('Cloud backup changed on another device.');
   await expect(page.locator('#autoCloud')).not.toBeChecked();
@@ -263,5 +273,81 @@ test('installed shell opens offline with the current app scripts', async ({ page
   await page.reload();
   await expect(page.locator('#coachplan')).toContainText('Bench press');
   await tab(page, 'social');
-  await expect(page.locator('#socialLogin')).toBeVisible();
+  await expect(page.locator('#hydrationGuest')).toBeVisible();
+  await expect(page.locator('#offline')).toBeVisible();
+});
+
+test('routine ordering, workout completion and history deletion use in-app controls', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('#editRoutine').click();
+  await page.getByRole('button', { name: 'Move up Lateral Raise' }).click();
+  await expect(page.getByRole('textbox', { name: 'Exercise 4', exact: true })).toHaveValue('Lateral Raise');
+  await page.locator('#addRoutineRow').click();
+  await page.getByRole('textbox', { name: 'Exercise 7', exact: true }).fill('Cable Crunch');
+  await page.locator('#saveRoutine').click();
+  await expect(page.locator('#coachplan .listRow').nth(3)).toContainText('Lateral Raise');
+  await page.locator('#beginWorkout').click();
+  await page.locator('#weight').fill('100');
+  await page.locator('#saveSet').click();
+  await expect(page.locator('#setProgressText')).toHaveText('1 of 3 working sets');
+  await page.locator('#finishWorkout').click();
+  await confirm(page);
+  await expect(page.locator('#workoutSummary')).toBeVisible();
+  await expect(page.locator('#summaryMetrics')).toContainText('400 lb');
+  await page.locator('#summaryHistory').click();
+  const workout = page.locator('.workoutCard').first();
+  await expect(workout.locator('summary')).toContainText('1 exercise · 400 lb');
+  await expect(workout.locator('table')).toBeHidden();
+  await workout.locator('summary').click();
+  await workout.getByRole('button', { name: 'Delete' }).click();
+  await page.locator('#confirmation').getByRole('button', { name: 'Cancel' }).click();
+  await expect(workout.locator('table')).toBeVisible();
+  await workout.getByRole('button', { name: 'Delete' }).click();
+  await confirm(page);
+  await expect(page.getByText('Your first workout will appear here.')).toBeVisible();
+});
+
+test('six tabs fit the current viewport and charts render at device pixel density', async ({ page }) => {
+  await page.addInitScript(() => {
+    const d = new Date();
+    const day = [d.getFullYear(), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0')].join('-');
+    localStorage.setItem('iron-log-coach-v3', JSON.stringify({
+      sets: [{ id: '1', date: day, split: 'Push', exercise: 'Bench press', weight: 100, reps: 5, rir: '', notes: '' }],
+      body: [{ date: day, weight: 160 }]
+    }));
+  });
+  await page.goto('/');
+  for (const name of ['workout', 'history', 'progress', 'body', 'social', 'settings']) {
+    await tab(page, name);
+    await expect(page.locator('[data-tab="' + name + '"]')).toHaveAttribute('aria-current', 'page');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    if (name === 'progress' || name === 'body') {
+      const chart = page.locator(name === 'progress' ? '#chart' : '#bodyChart');
+      await expect(chart).toBeVisible();
+      expect(await chart.evaluate(canvas => canvas.width === Math.round(canvas.getBoundingClientRect().width * devicePixelRatio))).toBe(true);
+    }
+  }
+});
+
+test('workout recommendations and automatic advancement honor saved prescriptions', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('iron-log-coach-v3', JSON.stringify({
+      sets: [{ id: 'past', date: '2024-01-01', split: 'Push', exercise: 'Bench press', weight: 100, reps: 6, rir: '2', notes: '' }],
+      body: []
+    }));
+    localStorage.setItem('iron-log-exercise-config-v1', JSON.stringify({
+      'bench press': { count: 1, lo: 4, hi: 6, step: 5, rest: 75 }
+    }));
+  });
+  await page.goto('/');
+  await page.locator('#beginWorkout').click();
+  await expect(page.locator('#last')).toContainText('100 lb × 6');
+  await expect(page.locator('#target')).toHaveText('105 lb × 4');
+  await expect(page.locator('#weight')).toHaveValue('105');
+  await page.locator('#saveSet').click();
+  await expect(page.locator('#exerciseTitle')).toHaveText('Incline Dumbbell Press');
+  await expect(page.locator('#currentsets')).toContainText('105 lb');
+  await expect(page.locator('#barclock')).toHaveText(/^01:1[0-5]$/);
+  await page.reload();
+  await expect(page.locator('#exerciseTitle')).toHaveText('Incline Dumbbell Press');
 });

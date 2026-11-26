@@ -14,8 +14,15 @@
     catch { return false; }
     return true;
   };
-  const say = text => { $('socialStatus').textContent = text; $('profileStatus').textContent = text; };
-  const guarded = fn => async () => { try { await fn(); } catch (error) { say(error.message); } };
+  const statusId = () => document.querySelector('[data-page="social"]').hidden ? 'profileStatus' : 'socialStatus';
+  const say = (message, persistent = false) => {
+    status(statusId(), persistent ? message : '');
+    toast(message);
+  };
+  const guarded = fn => async () => {
+    try { await fn(); }
+    catch (error) { say(navigator.onLine ? error.message : 'You’re offline. Try again when connected.', true); }
+  };
   const groupKey = id => 'iron-log-hydration-group-' + id;
   const sessionData = value => value && value.refresh_token && value.user?.id ? value : null;
   let auth = sessionData(readJSON(tokenKey));
@@ -135,8 +142,11 @@
     $('waterHistory').textContent = '';
     $('waterStreak').textContent = '';
     $('waterOwn').replaceChildren();
-    $('waterTotal').textContent = '0 oz';
+    $('waterTotal').textContent = '— oz';
+    $('socialRefresh').disabled = !auth;
     $('recoverCode').value = '';
+    status('profileStatus', '');
+    status('socialStatus', '');
   }
 
   function accountAction(fn) {
@@ -158,11 +168,11 @@
     const username = field('socialUsername', 40);
     const saved = setAuth(await postAuth(username));
     say(saved ? 'Welcome, ' + username + '!' : 'Browser storage is unavailable. Generate a recovery code now.');
-    await refresh();
+    if (visible()) await refresh();
   });
 
   $('issueCode').onclick = accountAction(async () => {
-    if (!confirm('Generate a new recovery code? This replaces any earlier code.')) return;
+    if (!await confirmAction('Generate a new recovery code? This replaces any earlier code.', 'Generate code')) return;
     showCode(await rpc('issue_recovery_code', {}));
     say('Recovery code generated.');
   });
@@ -188,12 +198,12 @@
       write(pendingKey, null);
     }
     showCode(replacement);
-    say('Membership recovered. Save your new recovery code and restore your cloud backup if needed.');
-    await refresh();
+    say('Membership recovered. Save your new recovery code.', true);
+    if (visible()) await refresh();
   });
 
   $('socialSignOut').onclick = accountAction(async () => {
-    if (!confirm('Sign out of Iron Log? Make sure you’ve saved your recovery code.')) return;
+    if (!await confirmAction('Sign out of Iron Log? Make sure you’ve saved your recovery code.', 'Sign out')) return;
     const active = auth;
     // A revoked/expired local session should still be removable.
     try { await request('/auth/v1/logout?scope=local', { method: 'POST' }, active.access_token); }
@@ -232,14 +242,23 @@
   }
 
   function bottle(oz, goal, large = false) {
-    const bottle = node('div', '');
-    bottle.className = 'waterBottle' + (large ? ' large' : '');
+    const container = node('div', '');
+    container.className = 'waterBottle' + (large ? ' large' : '');
+    container.setAttribute('aria-hidden', 'true');
+    const chamber = node('div', '');
+    chamber.className = 'waterWindow';
     const fill = node('div', '');
     fill.className = 'waterFill';
+    chamber.append(fill);
+    container.append(chamber, node('span', ''));
+    updateBottle(container, oz, goal);
+    return container;
+  }
+
+  function updateBottle(container, oz, goal) {
     const percent = Math.min(100, 100 * oz / goal);
-    fill.style.height = percent + '%';
-    bottle.append(fill, node('span', Math.round(percent) + '%'));
-    return bottle;
+    container.querySelector('.waterFill').style.height = percent + '%';
+    container.querySelector('span').textContent = Math.round(percent) + '%';
   }
 
   function options(select, rows, value, label) {
@@ -267,12 +286,21 @@
   function refresh() {
     refreshAgain = true;
     if (!refreshing) {
+      const initial = !$('waterOwn').firstElementChild;
+      $('hydrationLoading').hidden = !initial;
+      $('hydrationOverview').setAttribute('aria-busy', String(initial));
+      $('socialRefresh').disabled = true;
       refreshing = (async () => {
         while (refreshAgain) {
           refreshAgain = false;
           if (auth) await updateHydration();
         }
-      })().finally(() => { refreshing = null; });
+      })().finally(() => {
+        refreshing = null;
+        $('hydrationLoading').hidden = true;
+        $('hydrationOverview').setAttribute('aria-busy', 'false');
+        $('socialRefresh').disabled = !auth;
+      });
     }
     return refreshing;
   }
@@ -298,17 +326,23 @@
     $('socialList').disabled = !current;
     write(groupKey(user), current);
     $('socialDetails').hidden = !group;
-    $('socialDates').textContent = 'Today · ' + day;
+    $('socialDates').textContent = 'Today’s intake';
 
     const own = Number(history[0]?.day === day ? history[0].oz : 0);
     const goal = Number(profiles[0]?.goal_oz || 64);
-    $('waterOwn').replaceChildren(bottle(own, goal, true));
+    const ownBottle = $('waterOwn').firstElementChild;
+    if (ownBottle) updateBottle(ownBottle, own, goal);
+    else $('waterOwn').append(bottle(own, goal, true));
     $('waterTotal').textContent = own + ' / ' + goal + ' oz';
     if (document.activeElement !== $('waterGoal')) $('waterGoal').value = goal;
     const week = history.filter(row => row.day >= shiftDay(day, -6));
-    $('waterHistory').textContent = week.length
-      ? 'Last 7 days: ' + week.map(row => row.day.slice(5) + ' — ' + row.oz + ' oz').join(' · ')
-      : 'Your hydration history will appear here.';
+    $('waterHistory').replaceChildren(...(week.length ? week.map(row => {
+      const item = node('div', '');
+      item.className = 'listRow sectionLine';
+      item.append(node('span', displayDate(row.day, { weekday: 'short', month: 'short', day: 'numeric' })),
+        node('strong', row.oz + ' / ' + row.goal_oz + ' oz'));
+      return item;
+    }) : [node('p', 'Your latest seven days will appear here.')]));
     const streak = streaks(history, day);
     const days = n => n + (n === 1 ? ' day' : ' days');
     $('waterStreak').textContent = 'Goal streak: ' + days(streak.current) + ' · Best: ' + days(streak.longest);
@@ -349,8 +383,9 @@
       const total = totals.get(member.user_id) || 0;
       const row = node('div', '');
       row.className = 'waterFriend';
-      row.append(bottle(total, Number(member.goal_oz)),
-        node('div', member.display_name + ' · ' + total + ' / ' + member.goal_oz + ' oz'));
+      const label = node('div', '');
+      label.append(node('strong', member.display_name), node('small', total + ' / ' + member.goal_oz + ' oz'));
+      row.append(bottle(total, Number(member.goal_oz)), label);
       return row;
     });
     $('socialBoard').replaceChildren(...(board.length ? board : [node('p', 'Invite a friend to see their daily water intake here.')]));
@@ -382,21 +417,21 @@
   $('renameGroup').onclick = guarded(async () => { await manage('rename', field('renameTitle', 80)); say('Group renamed.'); });
   $('saveGroupName').onclick = guarded(async () => { await manage('name', field('groupDisplayName', 40)); say('Display name saved.'); });
   $('leaveGroup').onclick = guarded(async () => {
-    if (!confirm('Leave this group? Your personal hydration history stays with you.')) return;
+    if (!await confirmAction('Leave this group? Your personal hydration history stays with you.', 'Leave group')) return;
     await manage('leave');
     say('Left group.');
   });
   $('removeMember').onclick = guarded(async () => {
     const member = $('manageMember').value;
     if (!member) throw new Error('Choose a member.');
-    if (!confirm('Remove this member and replace the group’s invitation link?')) return;
+    if (!await confirmAction('Remove this member and replace the group’s invitation link?', 'Remove member')) return;
     await manage('remove', null, member);
     say('Member removed. The group has a new invitation link.');
   });
   $('transferGroup').onclick = guarded(async () => {
     const member = $('manageMember').value;
     if (!member) throw new Error('Choose a member.');
-    if (!confirm('Transfer ownership of this group to the selected member?')) return;
+    if (!await confirmAction('Transfer ownership of this group to the selected member?', 'Transfer ownership')) return;
     await manage('transfer', null, member);
     say('Ownership transferred.');
   });
@@ -647,23 +682,24 @@
 
   $('socialBackup').onclick = guarded(() => runBackup(async user => {
     const row = await cloudRow(user);
-    if (!confirm(row ? 'Replace the current cloud backup with this device’s workouts and settings?'
-      : 'Save this device’s workouts and settings to your private cloud backup?')) return;
+    if (!await confirmAction(row ? 'Replace the current cloud backup with this device’s workouts and settings?'
+      : 'Save this device’s workouts and settings to your private cloud backup?', 'Save backup')) return;
     await saveCloud(user, row?.updated_at ?? null);
-    say('Cloud backup saved.');
+    say('Cloud backup saved.', true);
   }));
 
   $('socialRestore').onclick = guarded(() => runBackup(async (user, pref) => {
     const row = await cloudRow(user, true);
     if (!row) throw new Error('No cloud backup found.');
     const parts = backupParts(row.payload);
-    if (auth?.user.id !== user || !confirm('Replace local workouts and any settings included in your cloud backup?')) return;
+    if (!await confirmAction('Replace local workouts and settings included in your cloud backup?', 'Restore backup')
+        || auth?.user.id !== user) return;
     restoreBackup(parts);
     clearTimeout(backupTimer);
     backupAgain = false;
     clearPendingBackup(user, pendingBackup(user));
     write(pref + '-server', row.updated_at);
-    say('Cloud backup restored.');
+    say('Cloud backup restored.', true);
   }));
 
   $('autoCloud').onchange = guarded(async () => {
@@ -676,8 +712,8 @@
     }
     await runBackup(async (user, pref) => {
       const row = await cloudRow(user);
-      if (!confirm(row ? 'Replace the current cloud backup and back up future changes automatically?'
-        : 'Save this device’s workouts and settings and back up future changes automatically?')) return;
+      if (!await confirmAction(row ? 'Replace the current cloud backup and back up future changes automatically?'
+        : 'Save this device’s workouts and settings and back up future changes automatically?', 'Enable backup')) return;
       await saveCloud(user, row?.updated_at ?? null);
       if (!write(pref, 'yes')) throw new Error('Backup saved, but browser storage is unavailable for automatic backup.');
       scheduleBackup();
