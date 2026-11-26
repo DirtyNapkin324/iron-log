@@ -1,0 +1,12 @@
+{
+  "name": "iron-log",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/core.test.cjs",
+    "test:db": "bash tests/database.sh",
+    "test:browser": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.1"
+  }
+}
