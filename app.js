@@ -155,16 +155,35 @@ function toast(message) {
 function showDialog(dialog) {
   if (!dialog.open) dialog.showModal();
 }
-function confirmAction(message, action = 'Continue', title = 'Confirm action') {
+function confirmAction(message, action = 'Continue', title = 'Confirm action', onConfirmed) {
   const dialog = $('confirmation');
   if (dialog.open) return Promise.resolve(false);
-  if (!dialog.showModal) return Promise.resolve(window.confirm(message));
+  if (!dialog.showModal) {
+    const confirmed = window.confirm(message);
+    if (confirmed) onConfirmed?.();
+    return Promise.resolve(confirmed);
+  }
   $('confirmTitle').textContent = title;
   $('confirmMessage').textContent = message;
   $('confirmAction').textContent = action;
   dialog.returnValue = '';
   return new Promise((resolve) => {
-    dialog.addEventListener('close', () => resolve(dialog.returnValue === 'confirm'), { once: true });
+    const form = dialog.querySelector('form');
+    function commit(event) {
+      if (event.submitter?.value !== 'confirm') return;
+      event.preventDefault();
+      dialog.close('confirm');
+      onConfirmed();
+    }
+    if (onConfirmed) form.addEventListener('submit', commit);
+    dialog.addEventListener(
+      'close',
+      () => {
+        form.removeEventListener('submit', commit);
+        resolve(dialog.returnValue === 'confirm');
+      },
+      { once: true },
+    );
     showDialog(dialog);
   });
 }
@@ -974,17 +993,15 @@ $('cancelWorkout').onclick = () => {
   showDialog($('cancelWorkoutSheet'));
 };
 $('cancelKeep').onclick = () => closeCancelledWorkout(active);
-$('cancelDiscard').onclick = async () => {
+$('cancelDiscard').onclick = () => {
   const session = active;
   if (!session || !ownedWorkoutSets(session).length) return;
-  if (
-    await confirmAction(
-      'Permanently remove the sets linked to this workout?',
-      'Discard logged sets',
-      'Discard logged sets?',
-    )
-  )
-    closeCancelledWorkout(session, true);
+  confirmAction(
+    'Permanently remove the sets linked to this workout?',
+    'Discard logged sets',
+    'Discard logged sets?',
+    () => closeCancelledWorkout(session, true),
+  );
 };
 
 $('finishWorkout').onclick = async () => {

@@ -1,6 +1,6 @@
-const CACHE = 'iron-log-ios-v58';
+const CACHE = 'iron-log-ios-v59';
 const FILES = ['./', './index.html', './manifest.webmanifest?v=56', './icon.svg?v=56',
-  './apple-touch-icon.png?v=56', './iron-core.js?v=58', './exercise-library.js?v=55', './routine-builder.js?v=55', './routine-ui.js?v=58', './training-core.js?v=57', './training-ui.js?v=58', './app.js?v=58', './app.css?v=58', './social.js?v=57'];
+  './apple-touch-icon.png?v=56', './iron-core.js?v=58', './exercise-library.js?v=55', './routine-builder.js?v=55', './routine-ui.js?v=58', './training-core.js?v=57', './training-ui.js?v=58', './app.js?v=59', './app.css?v=58', './social.js?v=57'];
 
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE)
