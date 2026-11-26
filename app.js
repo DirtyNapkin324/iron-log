@@ -18,15 +18,37 @@ const stamp = (date) => new Date(date + 'T12:00:00');
 const displayDate = (date, options = { month: 'short', day: 'numeric', year: 'numeric' }) =>
   stamp(date).toLocaleDateString(undefined, options);
 const isIsolation = (n) => /curl|raise|fly|pec deck|pushdown|extension|calf/i.test(n);
-const isWorking = (set) => !/drop set|warm.?up/i.test(set.notes || '');
+const isWorking = Training.working;
 const splitName = (split) =>
   split === 'Fitness assignment' ? 'Separate workout' : routineById(split)?.name || split;
 const sessionSets = (date = $('date').value, split = $('split').value) =>
-  data.sets.filter((set) => set.date === date && set.split === split);
+  data.sets.filter(
+    (set) =>
+      set.date === date &&
+      set.split === split &&
+      (active?.date === date && active.split === split
+        ? active.id
+          ? set.workoutId === active.id
+          : !set.workoutId
+        : true),
+  );
 const regular = () => data.sets.filter((set) => set.split !== 'Fitness assignment');
-const volume = (sets) => sets.reduce((sum, set) => sum + set.weight * set.reps, 0);
-const exerciseCount = (sets) => new Set(sets.map((set) => exerciseIdentity(set))).size;
-const est = (set) => (set.reps === 1 ? set.weight : set.reps <= 10 ? set.weight * (1 + set.reps / 30) : null);
+const volume = Training.volume;
+const exerciseCount = (sets) => new Set(sets.map(exerciseIdentity)).size;
+const est = (set) => (isWorking(set) ? Training.estimate(set) : null);
+const weightUnit = () => data.training?.unit || 'lb';
+const shownWeight = (value) => number(Training.display(value, weightUnit())) + ' ' + weightUnit();
+const weightInput = (value) =>
+  value == null ? '' : String(Number(Training.display(value, weightUnit()).toFixed(3)));
+const inputPounds = (value) => Number(Training.pounds(Number(value), weightUnit()).toFixed(8));
+function setPreference(name, value) {
+  data.training = { ...data.training, [name]: value };
+  persistData();
+}
+const planCount = (row) =>
+  active?.extra && Object.hasOwn(active.extra, row.id) ? active.extra[row.id] : rowSettings(row).count;
+let undoItem = null;
+let calendarDay = '';
 
 function read(key, fallback) {
   try {
@@ -38,6 +60,8 @@ function read(key, fallback) {
 
 let data = read(key, {});
 if (!Array.isArray(data.sets) || !Array.isArray(data.body)) data = { sets: [], body: [] };
+data.workouts ||= [];
+data.sets = Training.normalizeSets(data.sets);
 const defaultPlans = {
   Push: [
     'Bench press',
@@ -104,6 +128,7 @@ let editing = null;
 let repeatOrigin = null;
 let manual = false;
 let lastSubmitAt = 0;
+let lastSubmitKey = '';
 let toastTimer;
 let page = 'workout';
 const pages = {
@@ -216,15 +241,18 @@ function prescription(n, history, current, override) {
     step = cfg.step;
   }
   let rest = cfg?.rest ?? (iso ? 105 : 180);
-  let valid = (s) => !/drop set|warm.?up/i.test(s.notes || '') && s.weight > 0 && s.reps > 0;
-  let prior = history.filter(valid),
-    done = current.filter(valid),
-    lastDate = prior
-      .map((s) => s.date)
-      .sort()
-      .at(-1),
-    last = prior.filter((s) => s.date === lastDate),
-    idx = done.length,
+  const valid = (s) => isWorking(s) && s.weight > 0 && s.reps > 0;
+  const prior = Training.unique(history).filter(valid),
+    done = current.filter(valid);
+  const sessions = new Map();
+  for (const set of prior) {
+    const key = Training.sessionKey(set);
+    if (!sessions.has(key)) sessions.set(key, []);
+    sessions.get(key).push(set);
+  }
+  const recentSessions = [...sessions.values()].slice(-3);
+  const last = recentSessions.at(-1) || [];
+  const idx = done.length,
     prev = last[Math.min(idx, last.length - 1)];
   let result = {
     count,
@@ -255,10 +283,10 @@ function prescription(n, history, current, override) {
         s.rir !== '' &&
         s.rir != null &&
         Number.parseInt(s.rir) >= (cfg?.rir ?? 1) &&
-        (cfg?.rir === undefined || !/failed|not completed|very heavy/i.test(s.notes || '')),
+        !Training.failed(s),
     );
   let unknown = prev.rir === '' || prev.rir == null,
-    failed = /failed|not completed|very heavy/i.test(prev.notes || '') || (!unknown && Number(prev.rir) === 0);
+    failed = Training.failed(prev) || (!unknown && Number(prev.rir) === 0);
   result.weight = prev.weight;
   result.reps = Math.max(lo, Math.min(hi, prev.reps));
   if (n.includes('machine not confirmed')) {
@@ -266,7 +294,13 @@ function prescription(n, history, current, override) {
       'Machine unconfirmed: use this only if it is the same machine; otherwise establish a new baseline.';
     return result;
   }
-  if (allReady && hi > lo && !n.includes('face pull')) {
+  const priorSession = recentSessions.at(-2);
+  const setback = priorSession?.some(
+    (set) => set.weight >= prev.weight && (set.reps < lo || Training.failed(set)),
+  );
+  if (allReady && setback) {
+    result.why = 'Repeat this load to confirm that the improvement holds.';
+  } else if (allReady && hi > lo && !n.includes('face pull')) {
     result.weight = Math.round((prev.weight + step) * 100) / 100;
     result.reps = lo;
     result.why =
@@ -289,11 +323,10 @@ function prescription(n, history, current, override) {
   } else {
     result.why = 'At top of range. Confirm effort on all sets before increasing load.';
   }
-  let dates = [...new Set(prior.map((s) => s.date))].sort().slice(-3);
   if (
-    dates.length === 3 &&
+    recentSessions.length === 3 &&
     !allReady &&
-    dates.every((d) => prior.filter((s) => s.date === d).every((s) => s.reps < hi && Number(s.rir || -1) === 0))
+    recentSessions.every((session) => session.every((s) => s.reps < hi && (Training.failed(s) || s.rir === '0')))
   ) {
     result.weight = Math.max(0, Math.round((prev.weight - step) * 100) / 100);
     result.reps = lo;
@@ -301,7 +334,7 @@ function prescription(n, history, current, override) {
       'Three recent sessions near failure without reaching the rep target. Try one increment lighter and rebuild.';
   }
   let recent = done.at(-1);
-  if (recent && (recent.reps < lo || recent.rir === '0')) {
+  if (recent && (recent.reps < lo || recent.rir === '0' || Training.failed(recent))) {
     result.weight = Math.min(result.weight, Math.round(recent.weight * 0.95 * 100) / 100);
     result.reps = lo;
     result.why = 'Fatigue check: reduce to the nearest available lighter load for the next set.';
@@ -345,42 +378,45 @@ function setsForRow(row, rows = sessionSets()) {
       matchesExercise(set, name, row) && (set.routineRowId ? set.routineRowId === row.id : row.id === first?.id),
   );
 }
-function recommend(name, row = currentRow()) {
+function comparableHistory(name, row) {
   const split = $('split').value,
     date = $('date').value;
-  const same = (set) =>
-    matchesExercise(set, name, row) && (set.split === 'Fitness assignment') === (split === 'Fitness assignment');
+  return data.sets
+    .filter(
+      (set) =>
+        (set.date < date || (matchesActive() && active.id && set.date === date && set.workoutId !== active.id)) &&
+        matchesExercise(set, name, row) &&
+        (set.split === 'Fitness assignment') === (split === 'Fitness assignment'),
+    )
+    .sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
+}
+function previousRows(name, row) {
+  const history = comparableHistory(name, row).filter(isWorking);
+  const last = history.at(-1);
+  return last ? history.filter((set) => Training.sessionKey(set) === Training.sessionKey(last)) : [];
+}
+function recommend(name, row = currentRow()) {
   return prescription(
     norm(name),
-    data.sets.filter((set) => same(set) && set.date < date),
-    row ? setsForRow(row) : sessionSets().filter(same),
+    comparableHistory(name, row),
+    row ? setsForRow(row) : sessionSets().filter((set) => matchesExercise(set, name, null)),
     row ? rowSettings(row) : undefined,
   );
 }
 
 function trainingActive() {
-  return Boolean(active && active.date === today());
+  return Boolean(active?.date && active?.split);
 }
 function matchesActive() {
   return trainingActive() && active.date === $('date').value && active.split === $('split').value;
 }
 
 function previousPerformance(name, row) {
-  const separate = $('split').value === 'Fitness assignment';
-  const previous = data.sets
-    .filter(
-      (set) =>
-        set.date < $('date').value &&
-        matchesExercise(set, name, row) &&
-        (set.split === 'Fitness assignment') === separate &&
-        isWorking(set),
-    )
-    .sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id))[0];
+  const previous = previousRows(name, row).at(-1);
   return previous
-    ? number(previous.weight) + ' lb × ' + previous.reps + (previous.rir ? ' · ' + previous.rir + ' RIR' : '')
+    ? shownWeight(previous.weight) + ' × ' + previous.reps + (previous.rir ? ' · ' + previous.rir + ' RIR' : '')
     : '—';
 }
-
 function target() {
   const name = $('exercise').value.trim();
   $('exerciseTitle').textContent = name || 'Choose exercise';
@@ -405,13 +441,16 @@ function target() {
     isWorking,
   ).length;
   $('setProgress').replaceChildren(
-    ...Array.from({ length: recommendation.count }, (_, i) => el('span', '', i < done ? 'done' : '')),
+    ...Array.from({ length: row ? planCount(row) : recommendation.count }, (_, i) =>
+      el('span', '', i < done ? 'done' : ''),
+    ),
   );
-  $('setProgressText').textContent = done + ' of ' + recommendation.count + ' working sets';
+  $('setProgressText').textContent =
+    done + ' of ' + (row ? planCount(row) : recommendation.count) + ' working sets';
   $('target').textContent =
     recommendation.weight === null
       ? 'Baseline × ' + recommendation.reps
-      : number(recommendation.weight) + ' lb × ' + recommendation.reps;
+      : shownWeight(recommendation.weight) + ' × ' + recommendation.reps;
   if (recommendation.rir !== undefined) $('target').textContent += ' · ' + recommendation.rir + ' RIR';
   $('recommendationWhy').textContent =
     recommendation.why +
@@ -428,9 +467,12 @@ function target() {
 function applyTarget() {
   if (editing || !$('exercise').value.trim()) return;
   const r = recommend($('exercise').value);
-  $('weight').value = r.weight ?? '';
+  $('weight').value = weightInput(r.weight);
   $('reps').value = r.reps;
   $('rir').value = $('notes').value = '';
+  $('setKind').value = 'working';
+  $('partialReps').value = '0';
+  $('failedSet').checked = false;
   target();
 }
 
@@ -454,6 +496,7 @@ function chooseExercise(row, scroll = false) {
   }
   applyTarget();
   loadConfig();
+  window.dispatchEvent(new Event('ironlog:chooseExercise'));
   renderTraining();
   if (scroll) $('trainingLog').scrollIntoView({ block: 'start' });
 }
@@ -468,7 +511,7 @@ function loadConfig() {
     ['cfgStep', 'step'],
     ['cfgRest', 'rest'],
   ]) {
-    $(id).value = r[field];
+    $(id).value = field === 'step' ? weightInput(r[field]) : r[field];
   }
 }
 
@@ -509,7 +552,7 @@ function renderTraining() {
     ? queue.length + ' exercises planned'
     : 'Create or restore a routine to start.';
   $('routineHeading').textContent = showLogger ? 'Exercise queue' : splitName(split) + ' plan';
-  $('sessionstats').textContent = rows.length + ' sets · ' + number(volume(rows)) + ' lb';
+  $('sessionstats').textContent = rows.length + ' sets · ' + shownWeight(volume(rows));
   $('coachplan').replaceChildren(
     ...queue.map((row, i) => {
       const name = rowExercise(row)?.name;
@@ -520,7 +563,7 @@ function renderTraining() {
       item.append(
         el('span', String(i + 1).padStart(2, '0'), 'planIndex'),
         el('span', name),
-        el('span', done + '/' + rowSettings(row).count, 'planCount'),
+        el('span', done + '/' + planCount(row), 'planCount'),
       );
       if (showLogger) item.onclick = () => chooseExercise(row, true);
       if (showLogger && currentRow()?.id === row.id) item.setAttribute('aria-current', 'true');
@@ -531,6 +574,7 @@ function renderTraining() {
   $('currentsets').replaceChildren(setTable(rows, { showExercise: true, repeat: true }));
   activeUI();
   target();
+  window.dispatchEvent(new Event('ironlog:training'));
 }
 
 function editSet(set, repeat = false) {
@@ -604,55 +648,140 @@ $('nextExercise').onclick = () => {
   else toast('You reached the end of this routine.');
 };
 
-$('log').onsubmit = (event) => {
-  event.preventDefault();
-  if (Date.now() - lastSubmitAt < 750 || !$('exercise').value.trim() || !$('weight').value || !$('reps').value)
-    return;
-  lastSubmitAt = Date.now();
+function logSet(
+  { weight, reps, rir = '', notes = '', kind = 'working', failed = false, partials = 0 },
+  options = {},
+) {
+  const name = $('exercise').value.trim();
+  if (
+    !name ||
+    !Number.isFinite(weight) ||
+    weight < 0 ||
+    !Number.isInteger(reps) ||
+    reps < (partials > 0 ? 0 : 1) ||
+    !Number.isInteger(partials) ||
+    partials < 0 ||
+    partials > 1000
+  ) {
+    toast('Enter valid weight and repetitions.');
+    return false;
+  }
   const old = editing ? data.sets.find((set) => set.id === editing) : null;
   const row = currentRow();
+  const live = matchesActive() && !editing;
+  const rest = recommend(name, row).rest;
   const item = {
     ...old,
-    id: editing || Date.now().toString().padStart(14, '0') + '-' + Math.random().toString(36).slice(2),
+    id: old?.id || RoutineBuilder.uid(String(Date.now()).padStart(14, '0')),
     date: $('date').value,
     split: $('split').value,
-    exercise: $('exercise').value.trim(),
-    weight: Number($('weight').value),
-    reps: Number($('reps').value),
-    rir: $('rir').value,
-    notes: $('notes').value,
+    exercise: name,
+    weight,
+    reps,
+    rir,
+    notes,
+    kind,
+    failed,
+    partials,
   };
+  if (live && active.id) item.workoutId = active.id;
+  else if (old && (old.date !== item.date || old.split !== item.split)) delete item.workoutId;
   if (row) {
     item.exerciseId = row.exerciseId;
     item.routineRowId = row.id;
-  } else if (repeatOrigin?.exercise === item.exercise) {
+  } else if (repeatOrigin?.exercise === name) {
     if (repeatOrigin.exerciseId) item.exerciseId = repeatOrigin.exerciseId;
     if (repeatOrigin.routineRowId && repeatOrigin.split === item.split)
       item.routineRowId = repeatOrigin.routineRowId;
-  } else if (old && (old.exercise !== item.exercise || old.split !== item.split)) {
+  } else if (old && (old.exercise !== name || old.split !== item.split)) {
     delete item.exerciseId;
     delete item.routineRowId;
   }
-  if (editing) data.sets = data.sets.map((set) => (set.id === editing ? item : set));
+  const previous =
+    live && isWorking(item)
+      ? Training.records(
+          regular().filter((set) => set.date <= item.date && exerciseIdentity(set) === exerciseIdentity(item)),
+          exerciseIdentity,
+        )
+      : null;
+  if (old) data.sets = data.sets.map((set) => (set.id === old.id ? item : set));
   else data.sets.push(item);
-  const wasEdit = Boolean(editing);
+  if (live && row && !options.preserveInput && active.drafts?.[row.id]) {
+    delete active.drafts[row.id];
+    persistActive();
+  }
+  if (live) undoItem = { id: item.id, workout: active.id || active.started, row: row?.id };
   resetEdit();
-  persistData(wasEdit ? 'Set updated' : 'Set logged');
-  if (wasEdit) {
+  let message = old ? 'Set updated' : 'Set logged';
+  if (
+    previous?.best.length &&
+    Training.records(
+      regular().filter((set) => set.date <= item.date && exerciseIdentity(set) === exerciseIdentity(item)),
+      exerciseIdentity,
+    )
+      .markers.get(item.id)
+      ?.some(
+        (label) =>
+          label !== 'Exercise session volume' ||
+          previous.best.some(
+            (record) => record.label === label && Training.sessionKey(record.set) !== Training.sessionKey(item),
+          ),
+      )
+  ) {
+    message = 'Personal record · ' + name;
+  }
+  persistData(message);
+  if (old) {
     exitManual();
-    return;
+    return true;
   }
-  applyTarget();
-  if ($('autoRest').checked) startRest(recommend(item.exercise).rest);
-  if (!matchesActive()) return;
+  if (!options.preserveInput) applyTarget();
   const queue = workoutRows();
-  const position = queue.findIndex((item) => item.id === row?.id);
-  if (position >= 0 && setsForRow(row).filter(isWorking).length >= rowSettings(row).count) {
-    const next = queue
-      .slice(position + 1)
-      .find((item) => setsForRow(item).filter(isWorking).length < rowSettings(item).count);
-    if (next) chooseExercise(next);
+  const position = queue.findIndex((candidate) => candidate.id === row?.id);
+  const unfinished = (candidate) => setsForRow(candidate).filter(isWorking).length < planCount(candidate);
+  let next,
+    paired = false;
+  if (live && position >= 0 && isWorking(item)) {
+    const partner = row.superset
+      ? queue[position + 1]
+      : queue[position - 1]?.superset
+        ? queue[position - 1]
+        : null;
+    if (partner && rowExercise(partner) && unfinished(partner)) {
+      next = partner;
+      paired = row.superset;
+    } else if (!unfinished(row)) next = queue.slice(position + 1).find(unfinished);
   }
+  if ($('autoRest').checked && !paired) startRest(rest);
+  if (next) chooseExercise(next);
+  return true;
+}
+
+$('log').onsubmit = (event) => {
+  event.preventDefault();
+  const submitKey = editing || currentRow()?.id || $('exercise').value;
+  if ((submitKey === lastSubmitKey && Date.now() - lastSubmitAt < 750) || !$('weight').value || !$('reps').value)
+    return;
+  lastSubmitAt = Date.now();
+  lastSubmitKey = submitKey;
+  const recommendation = recommend($('exercise').value);
+  const original = editing ? data.sets.find((set) => set.id === editing) : repeatOrigin;
+  const entered = $('weight').value;
+  const weight =
+    original && entered === weightInput(original.weight)
+      ? original.weight
+      : recommendation.weight !== null && entered === weightInput(recommendation.weight)
+        ? recommendation.weight
+        : inputPounds(entered);
+  logSet({
+    weight,
+    reps: Number($('reps').value),
+    rir: $('rir').value,
+    notes: $('notes').value,
+    kind: $('setKind').value,
+    failed: $('failedSet').checked,
+    partials: Number($('partialReps').value || 0),
+  });
 };
 
 function activeUI() {
@@ -676,7 +805,7 @@ function resumeWorkout() {
   active.rows ||= RoutineBuilder.clone(routineById(active.split)?.rows || []);
   const fallbackName = active.exercise;
   const queue = workoutRows().filter((row) => rowExercise(row));
-  const next = queue.find((row) => setsForRow(row).filter(isWorking).length < rowSettings(row).count);
+  const next = queue.find((row) => setsForRow(row).filter(isWorking).length < planCount(row));
   suggestions();
   chooseExercise(
     queue.find((row) => row.id === active.rowId) ||
@@ -693,6 +822,7 @@ $('beginWorkout').onclick = () => {
   const routine = routineById($('split').value);
   if (!routine?.rows.length || routine.archived) return;
   active = {
+    id: RoutineBuilder.uid('workout'),
     split: routine.id,
     name: routine.name,
     rows: RoutineBuilder.clone(routine.rows),
@@ -717,17 +847,40 @@ $('finishWorkout').onclick = async () => {
   )
     return;
   const sets = sessionSets(active.date, active.split);
-  const minutes = Math.max(0, Math.floor((Date.now() - active.started) / 60000));
+  const finished = Date.now();
+  const minutes = Math.max(0, Math.floor((finished - active.started) / 60000));
+  const id = active.id || active.date + ' ' + active.split;
+  const workout = {
+    id,
+    date: active.date,
+    split: active.split,
+    name: active.name || splitName(active.split),
+    started: active.started,
+    finished,
+    notes: active.notes || '',
+  };
+  data.workouts = [...data.workouts.filter((item) => item.id !== id), workout];
   $('summarySplit').textContent = (active.name || splitName(active.split)) + ' · ' + displayDate(active.date);
   $('summaryMetrics').replaceChildren(
-    metric(sets.length, 'Sets'),
+    metric(sets.filter(isWorking).length, 'Working sets'),
     metric(exerciseCount(sets), 'Exercises'),
     metric(minutes + ' min', 'Duration'),
-    metric(number(volume(sets)) + ' lb', 'Volume'),
+    metric(shownWeight(volume(sets)), 'Volume'),
   );
+  const warmups = sets.filter((set) => Training.kind(set) === 'warmup').length;
+  const additional = sets.filter((set) => !isWorking(set) && Training.kind(set) !== 'warmup').length;
+  $('summaryHighlights').textContent = [
+    warmups && warmups + ' warm-up',
+    additional && additional + ' drop or back-off',
+    workout.notes,
+  ]
+    .filter(Boolean)
+    .join(' · ');
   active = null;
+  undoItem = null;
   persistActive();
   exitManual();
+  persistData();
   showDialog($('workoutSummary'));
 };
 $('summaryDone').onclick = () => $('workoutSummary').close();
@@ -756,7 +909,10 @@ $('cfgSave').onclick = () => {
     count: Number($('cfgSets').value),
     lo: Number($('cfgLo').value),
     hi: Number($('cfgHi').value),
-    step: Number($('cfgStep').value),
+    step:
+      $('cfgStep').value === weightInput(recommend(name).step)
+        ? recommend(name).step
+        : inputPounds($('cfgStep').value),
     rest: Number($('cfgRest').value),
   };
   if (
@@ -801,10 +957,18 @@ function setTable(sets, { showExercise = false, repeat = false } = {}) {
   sets.forEach((set, index) => {
     const row = body.insertRow();
     row.insertCell().textContent = showExercise ? set.exercise : index + 1;
-    if (set.notes || set.rir)
-      row.cells[0].append(el('small', [set.rir && set.rir + ' RIR', set.notes].filter(Boolean).join(' · ')));
-    row.insertCell().textContent = number(set.weight) + ' lb';
-    row.insertCell().textContent = set.reps;
+    const details = [
+      Training.kind(set) !== 'working' && Training.labels[Training.kind(set)],
+      Training.failed(set) && 'Failure',
+      set.rir && set.rir + ' RIR',
+      set.notes,
+    ].filter(Boolean);
+    if (details.length) row.cells[0].append(el('small', details.join(' · ')));
+    const badges = historyRecords?.get(set.id);
+    if (badges?.length && !repeat)
+      row.cells[0].append(el('small', 'PR · ' + [...new Set(badges)].join(', '), 'recordBadge'));
+    row.insertCell().textContent = shownWeight(set.weight);
+    row.insertCell().textContent = String(set.reps) + (set.partials ? ' +' + set.partials + ' partial' : '');
     const actions = row.insertCell();
     const edit = el('button', 'Edit', 'quiet');
     edit.onclick = () => editSet(set);
@@ -813,21 +977,22 @@ function setTable(sets, { showExercise = false, repeat = false } = {}) {
       const button = el('button', 'Repeat', 'quiet');
       button.onclick = () => editSet(set, true);
       actions.append(button);
-    } else {
-      const remove = el('button', 'Delete', 'quiet destructive');
-      remove.onclick = async () => {
-        if (!(await confirmAction('Remove this set from your workout history?', 'Delete set', 'Delete set?')))
-          return;
-        data.sets = data.sets.filter((item) => item.id !== set.id);
-        persistData('Set deleted');
-      };
-      actions.append(remove);
     }
+    const remove = el('button', 'Delete', 'quiet destructive');
+    remove.onclick = async () => {
+      if (!(await confirmAction('Remove this set from your workout history?', 'Delete set', 'Delete set?')))
+        return;
+      data.sets = data.sets.filter((item) => item.id !== set.id);
+      persistData('Set deleted');
+    };
+    actions.append(remove);
   });
   return table;
 }
 
+let historyRecords;
 function renderHistory() {
+  historyRecords = Training.records(regular(), exerciseIdentity).markers;
   const history = $('history');
   const open = new Set([...history.querySelectorAll('details[open]')].map((card) => card.dataset.session));
   const filter = $('filter').value;
@@ -839,15 +1004,25 @@ function renderHistory() {
     )
     .sort((a, b) => b.date.localeCompare(a.date) || a.id.localeCompare(b.id));
   for (const set of sets) {
-    const key = set.date + ' ' + set.split;
+    const key = Training.sessionKey(set);
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(set);
   }
+  for (const workout of data.workouts) if (!groups.has(workout.id)) groups.set(workout.id, []);
+  const metadata = new Map(data.workouts.map((workout) => [workout.id, workout]));
   const cards = [];
-  for (const [key, workout] of groups) {
-    const { date, split } = workout[0];
+  for (const [key, workout] of [...groups].sort(
+    ([keyA, a], [keyB, b]) =>
+      (metadata.get(keyB)?.date || b[0].date).localeCompare(metadata.get(keyA)?.date || a[0].date) ||
+      (metadata.get(keyB)?.started || 0) - (metadata.get(keyA)?.started || 0),
+  )) {
+    const info = metadata.get(key);
+    const { date, split } = info || workout[0];
+    if (calendarDay && date !== calendarDay) continue;
+    if ((split === 'Fitness assignment') !== (filter === 'Fitness assignment') && filter !== 'All') continue;
     if (
       search &&
+      !norm([date, info?.name, info?.notes, splitName(split)].filter(Boolean).join(' ')).includes(search) &&
       !workout.some((set) =>
         norm([set.date, set.split, splitName(set.split), set.exercise, set.notes].join(' ')).includes(search),
       )
@@ -858,7 +1033,7 @@ function renderHistory() {
     const title = el('span', '', 'historyTitle');
     const count = exerciseCount(workout);
     title.append(
-      el('strong', splitName(split)),
+      el('strong', info?.name || splitName(split)),
       el(
         'span',
         displayDate(date) +
@@ -866,14 +1041,20 @@ function renderHistory() {
           count +
           (count === 1 ? ' exercise' : ' exercises') +
           ' · ' +
-          number(volume(workout)) +
-          ' lb',
+          shownWeight(volume(workout)) +
+          (info ? ' · ' + Math.round((info.finished - info.started) / 60000) + ' min' : ''),
         'historyMeta',
       ),
     );
     summary.append(title);
     card.append(summary);
     card.dataset.session = key;
+    if (info) {
+      if (info.notes) card.append(el('p', info.notes, 'small muted'));
+      const edit = el('button', 'Edit workout details', 'quiet');
+      edit.onclick = () => window.TrainingUI?.workoutDetails(info);
+      card.append(edit);
+    }
     card.open = open.has(key);
     const exercises = new Map();
     for (const set of workout) {
@@ -898,6 +1079,7 @@ function renderHistory() {
     cards.push(empty);
   }
   history.replaceChildren(...cards);
+  window.TrainingUI?.calendar();
 }
 $('filter').onchange = renderHistory;
 $('searchHistory').oninput = renderHistory;
@@ -906,7 +1088,7 @@ function inRange(date, range) {
   return date <= today() && (range === 'all' || date >= IronCore.shiftDay(today(), 1 - Number(range)));
 }
 
-function plot(id, emptyId, points, color, unit) {
+function plot(id, emptyId, points, color, unit, average = []) {
   const canvas = $(id);
   canvas.hidden = !points.length;
   $(emptyId).hidden = !!points.length;
@@ -922,7 +1104,7 @@ function plot(id, emptyId, points, color, unit) {
   const plotWidth = width - pad.left - pad.right;
   const plotHeight = height - pad.top - pad.bottom;
   if (plotWidth < 15) return;
-  const values = points.map((point) => point[1]);
+  const values = [...points, ...average].map((point) => point[1]);
   const low = Math.min(...values),
     high = Math.max(...values);
   const spread = Math.max(4, high - low);
@@ -963,6 +1145,16 @@ function plot(id, emptyId, points, color, unit) {
       height - 9,
     );
   });
+  if (average.length > 1) {
+    ctx.strokeStyle = '#a9b2af';
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    average.forEach(([day, weight], index) =>
+      index ? ctx.lineTo(x(day), y(weight)) : ctx.moveTo(x(day), y(weight)),
+    );
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
   ctx.strokeStyle = ctx.fillStyle = color;
   ctx.lineWidth = 2;
   ctx.lineJoin = 'round';
@@ -1003,7 +1195,7 @@ function renderProgress() {
   const range = $('progressRange').value;
   const selected = $('progress').value;
   const sets = regular().filter((set) => inRange(set.date, range));
-  const selectedSets = sets.filter((set) => exerciseIdentity(set) === selected);
+  const selectedSets = Training.unique(sets.filter((set) => isWorking(set) && exerciseIdentity(set) === selected));
   const estimates = new Map();
   for (const set of selectedSets) {
     const value = est(set);
@@ -1012,11 +1204,11 @@ function renderProgress() {
   const points = [...estimates].sort(([a], [b]) => a.localeCompare(b));
   $('records').replaceChildren(
     metric(
-      selectedSets.length ? number(Math.max(...selectedSets.map((set) => set.weight))) + ' lb' : '—',
+      selectedSets.length ? shownWeight(Math.max(...selectedSets.map((set) => set.weight))) : '—',
       'Heaviest set',
     ),
     metric(
-      points.length ? number(Math.round(Math.max(...points.map((point) => point[1])))) + ' lb' : '—',
+      points.length ? shownWeight(Math.round(Math.max(...points.map((point) => point[1])))) : '—',
       'Best estimated 1RM',
     ),
   );
@@ -1047,7 +1239,7 @@ function renderProgress() {
         el('strong', 'Week of ' + displayDate(week, { month: 'short', day: 'numeric' })),
         el(
           'span',
-          frequency + (frequency === 1 ? ' day' : ' days') + ' · ' + number(volume(sets)) + ' lb',
+          frequency + (frequency === 1 ? ' day' : ' days') + ' · ' + shownWeight(volume(sets)),
           'weekValue',
         ),
         bar,
@@ -1057,7 +1249,14 @@ function renderProgress() {
   $('progressOverview').replaceChildren(
     ...(rows.length ? rows : [el('p', 'Weekly totals will appear after your first workout.', 'empty')]),
   );
-  plot('chart', 'chartEmpty', points, '#c1f65d', 'lb');
+  plot(
+    'chart',
+    'chartEmpty',
+    points.map(([day, value]) => [day, Training.display(value, weightUnit())]),
+    '#c1f65d',
+    weightUnit(),
+  );
+  window.TrainingUI?.analytics();
 }
 $('progress').onchange = $('progressRange').onchange = renderProgress;
 
@@ -1065,7 +1264,7 @@ $('bodyform').onsubmit = (event) => {
   event.preventDefault();
   const date = $('bdate').value;
   data.body = data.body.filter((entry) => entry.date !== date);
-  data.body.push({ date, weight: Number($('bodyweight').value) });
+  data.body.push({ date, weight: inputPounds($('bodyweight').value) });
   $('bodyweight').value = '';
   persistData('Weight recorded');
 };
@@ -1073,17 +1272,17 @@ $('bodyform').onsubmit = (event) => {
 function renderBody() {
   const entries = [...data.body].sort((a, b) => a.date.localeCompare(b.date));
   const latest = entries[entries.length - 1];
-  $('bw').textContent = latest ? number(latest.weight) + ' lb' : '—';
+  $('bw').textContent = latest ? shownWeight(latest.weight) : '—';
   $('bodyLatestDate').textContent = latest ? displayDate(latest.date) : 'No weigh-ins yet';
   const week = entries.filter((entry) => inRange(entry.date, '7'));
   const selected = entries.filter((entry) => inRange(entry.date, $('bodyRange').value));
   const change = selected.length > 1 ? selected[selected.length - 1].weight - selected[0].weight : null;
   $('bodytrend').replaceChildren(
     metric(
-      week.length ? number(week.reduce((sum, entry) => sum + entry.weight, 0) / week.length) + ' lb' : '—',
+      week.length ? shownWeight(week.reduce((sum, entry) => sum + entry.weight, 0) / week.length) : '—',
       '7-day average',
     ),
-    metric(change === null ? '—' : (change > 0 ? '+' : '') + number(change) + ' lb', 'Period change'),
+    metric(change === null ? '—' : (change > 0 ? '+' : '') + shownWeight(change), 'Period change'),
   );
   $('bodyhistory').replaceChildren(
     ...(entries.length
@@ -1093,7 +1292,7 @@ function renderBody() {
           .slice(0, 10)
           .map((entry) => {
             const row = el('div', '', 'sectionLine listRow');
-            const label = el('div', displayDate(entry.date) + ' · ' + number(entry.weight) + ' lb');
+            const label = el('div', displayDate(entry.date) + ' · ' + shownWeight(entry.weight));
             if (entry.notes) label.append(el('p', entry.notes, 'small muted'));
             const remove = el('button', 'Delete', 'quiet destructive');
             remove.onclick = async () => {
@@ -1113,12 +1312,27 @@ function renderBody() {
           })
       : [el('p', 'No weigh-ins yet.', 'empty')]),
   );
+  const goal = data.training?.bodyGoal;
+  $('bodyGoalProgress').hidden = !goal;
+  $('bodyGoalProgress').textContent = goal
+    ? 'Goal ' +
+      shownWeight(goal) +
+      (latest
+        ? ' · ' +
+          shownWeight(Math.abs(goal - latest.weight)) +
+          (latest.weight > goal ? ' above goal' : latest.weight < goal ? ' below goal' : ' from goal')
+        : '')
+    : '';
+  const rolling = Training.rollingWeight(entries)
+    .filter(([day]) => inRange(day, $('bodyRange').value))
+    .map(([day, value]) => [day, Training.display(value, weightUnit())]);
   plot(
     'bodyChart',
     'bodyChartEmpty',
-    selected.map((entry) => [entry.date, entry.weight]),
+    selected.map((entry) => [entry.date, Training.display(entry.weight, weightUnit())]),
     '#c1f65d',
-    'lb',
+    weightUnit(),
+    rolling,
   );
 }
 $('bodyRange').onchange = renderBody;
@@ -1152,88 +1366,125 @@ function render() {
   renderBody();
   renderProgress();
 }
-let deadline = 0,
-  interval,
-  paused = 0,
-  alarm = false;
+const restKey = 'iron-log-rest-v1';
+const storedRest = read(restKey, {});
+let deadline = Number(storedRest.deadline) || 0;
+let paused = Number(storedRest.paused) || 0;
+let restDuration = Number(storedRest.duration) || Math.max(0, paused, Math.ceil((deadline - Date.now()) / 1000));
+let restartDuration = Number(storedRest.restart) || restDuration;
+let interval, audio;
+function unlockAudio() {
+  const Audio = window.AudioContext || window.webkitAudioContext;
+  if (!data.training?.restSound || !Audio) return;
+  try {
+    audio ||= new Audio();
+    audio.resume().catch(() => {});
+  } catch {}
+}
+function signalRest() {
+  if (data.training?.restVibration !== false) navigator.vibrate?.(180);
+  if (!data.training?.restSound || audio?.state !== 'running') return;
+  const tone = audio.createOscillator(),
+    gain = audio.createGain();
+  tone.frequency.value = 660;
+  gain.gain.setValueAtTime(0.14, audio.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + 0.3);
+  tone.connect(gain).connect(audio.destination);
+  tone.start();
+  tone.stop(audio.currentTime + 0.32);
+}
 function persistRest() {
   try {
-    localStorage.setItem('iron-log-rest-v1', JSON.stringify({ deadline, paused }));
+    localStorage.setItem(
+      restKey,
+      JSON.stringify({ deadline, paused, duration: restDuration, restart: restartDuration }),
+    );
   } catch {}
 }
 function tick() {
-  let left = paused || Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
-  $('timer').textContent = $('barclock').textContent =
-    String(Math.floor(left / 60)).padStart(2, '0') + ':' + String(left % 60).padStart(2, '0');
-  if (!left) {
+  const seconds = paused || Math.max(0, (deadline - Date.now()) / 1000);
+  const left = Math.ceil(seconds);
+  $('timer').textContent = $('barclock').textContent = left
+    ? String(Math.floor(left / 60)).padStart(2, '0') + ':' + String(left % 60).padStart(2, '0')
+    : 'Done';
+  $('restProgress').max = Math.max(1, restDuration);
+  $('restProgress').value = Math.max(0, restDuration - seconds);
+  if (deadline && !left) {
     clearInterval(interval);
-    $('timer').textContent = $('barclock').textContent = 'Done';
+    const recent = Date.now() - deadline < 3000;
     deadline = 0;
     persistRest();
-    if (!alarm) {
-      alarm = true;
-      if (navigator.vibrate) navigator.vibrate(200);
-    }
+    if (!document.hidden && recent) signalRest();
   }
 }
-function startRest(sec) {
+function runRest(seconds) {
   clearInterval(interval);
   paused = 0;
-  alarm = false;
-  deadline = Date.now() + sec * 1000;
+  deadline = Date.now() + seconds * 1000;
   $('timerbar').hidden = false;
   $('pauseRest').textContent = $('barpause').textContent = 'Pause';
   persistRest();
   tick();
   interval = setInterval(tick, 250);
 }
+function startRest(seconds) {
+  unlockAudio();
+  restDuration = restartDuration = seconds;
+  runRest(seconds);
+}
 function pauseRest() {
   if (paused) {
-    startRest(paused);
+    unlockAudio();
+    runRest(paused);
     return;
   }
   if (!deadline) return;
-  paused = Math.max(1, Math.ceil((deadline - Date.now()) / 1000));
+  paused = Math.max(0.001, (deadline - Date.now()) / 1000);
   deadline = 0;
   clearInterval(interval);
   $('pauseRest').textContent = $('barpause').textContent = 'Resume';
   persistRest();
   tick();
 }
+function extendRest(amount) {
+  if (!deadline && !paused) {
+    startRest(amount);
+    return;
+  }
+  restDuration += amount;
+  if (paused) paused += amount;
+  else deadline += amount * 1000;
+  persistRest();
+  tick();
+}
 $('pauseRest').onclick = $('barpause').onclick = pauseRest;
-$('extendRest').onclick = () => {
-  if (paused) {
-    paused += 30;
-    persistRest();
-    tick();
-  } else startRest(Math.max(0, Math.ceil((deadline - Date.now()) / 1000)) + 30);
-};
-document.querySelectorAll('[data-rest]').forEach((b) => (b.onclick = () => startRest(Number(b.dataset.rest))));
+$('extendRest15').onclick = $('barExtend').onclick = () => extendRest(15);
+$('extendRest').onclick = () => extendRest(30);
+$('restartRest').onclick = () => startRest(restartDuration || 180);
+document
+  .querySelectorAll('[data-rest]')
+  .forEach((button) => (button.onclick = () => startRest(Number(button.dataset.rest))));
 $('stop').onclick = $('barstop').onclick = () => {
   clearInterval(interval);
   deadline = paused = 0;
   persistRest();
   $('timerbar').hidden = true;
-  $('timer').textContent = 'Stopped';
+  $('timer').textContent = 'Skipped';
   $('pauseRest').textContent = $('barpause').textContent = 'Pause';
 };
-try {
-  let t = JSON.parse(localStorage.getItem('iron-log-rest-v1') || 'null');
-  if (t?.paused > 0) {
-    paused = t.paused;
-    $('timerbar').hidden = false;
-    $('pauseRest').textContent = $('barpause').textContent = 'Resume';
-    tick();
-  } else if (t?.deadline > Date.now()) {
-    deadline = t.deadline;
-    $('timerbar').hidden = false;
-    tick();
-    interval = setInterval(tick, 250);
-  }
-} catch {}
+if (deadline || paused) {
+  $('timerbar').hidden = false;
+  if (paused) $('pauseRest').textContent = $('barpause').textContent = 'Resume';
+  tick();
+  if (deadline) interval = setInterval(tick, 250);
+}
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && (deadline || paused)) tick();
 });
+window.addEventListener('pageshow', () => {
+  if (deadline || paused) tick();
+});
+
 function download(name, content, type) {
   const url = URL.createObjectURL(new Blob([content], { type }));
   const link = el('a');
@@ -1250,9 +1501,10 @@ function makeBackup() {
       .filter((r) => RoutineBuilder.builtIn(r.id))
       .map((r) => [r.id, r.rows.map((row) => rowExercise(row).name)]),
   );
-  return { ...data, routines, exerciseConfig, routineState };
+  const training = { ...data.training, autoRest: data.training?.autoRest ?? read(restPref, true) !== false };
+  return { ...data, training, routines, exerciseConfig, routineState, activeSession: active };
 }
-function restoreBackup(parts) {
+function restoreBackup(parts, beforeWrite) {
   const next =
     parts.routineState ??
     (parts.routines !== undefined
@@ -1260,20 +1512,41 @@ function restoreBackup(parts) {
       : undefined);
   if (next !== undefined && !RoutineBuilder.usable(next))
     throw new Error('Backup contains missing exercise or routine references.');
-  // Keep references from the current workout snapshot if a backup replaces the custom library.
-  if (next && active?.customExercises) {
-    for (const entry of active.customExercises) {
+  const keepActive = parts.activeSession === undefined ? active : parts.activeSession;
+  // Preserve metadata used by an in-progress queue when the library in the backup differs.
+  if (next && keepActive?.customExercises) {
+    for (const entry of keepActive.customExercises) {
       if (!RoutineBuilder.exercise(next, entry.id)) next.customExercises.push(entry);
     }
   }
-  IronCore.writeBackup(localStorage, { ...parts, routineState: next });
-  data = parts.workout;
+  if (
+    keepActive?.rows?.some(
+      (row) =>
+        !RoutineBuilder.exercise(next || routineState, row.exerciseId) &&
+        !keepActive.customExercises?.some((entry) => entry.id === row.exerciseId),
+    )
+  ) {
+    throw new Error('Backup contains missing references in its active workout.');
+  }
+  const workout = {
+    ...parts.workout,
+    sets: Training.normalizeSets(parts.workout.sets),
+    workouts: parts.workout.workouts || [],
+  };
+  if (workout.training === undefined && data.training !== undefined) workout.training = data.training;
+  beforeWrite?.();
+  IronCore.writeBackup(localStorage, { ...parts, workout, routineState: next });
+  data = workout;
+  active = keepActive;
+  undoItem = null;
   if (next !== undefined) routineState = next;
   if (parts.exerciseConfig !== undefined)
     exerciseConfig = Object.assign(Object.create(null), parts.exerciseConfig);
   exitManual();
   render();
   loadConfig();
+  window.TrainingUI?.syncPreferences();
+  window.TrainingUI?.reload();
   status('status', 'Backup restored on this device.');
 }
 $('export').onclick = () => {
@@ -1296,6 +1569,143 @@ $('csv').onclick = () => {
   toast('Sets exported');
 };
 $('import').onclick = () => $('file').click();
+const recoveryKey = 'iron-log-before-replace-v1';
+function showRecoveryActions() {
+  const available = Boolean(read(recoveryKey, null));
+  $('recoverSnapshot').hidden = $('exportSnapshot').hidden = !available;
+}
+function previewMerge(parts) {
+  const changes = [];
+  function merge(label, existing, incoming, key) {
+    const result = Training.mergeRecords(existing, incoming, key);
+    if (incoming.length) changes.push({ label, ...result.report });
+    return result.records;
+  }
+  const sets = Training.mergeSets(data.sets, parts.workout.sets);
+  changes.push({ label: 'Workout sets', ...sets.report });
+  const body = merge('Weigh-ins', data.body, parts.workout.body, (item) => item.date);
+  const workouts = merge('Workout sessions', data.workouts, parts.workout.workouts || [], (item) => item.id);
+  let incoming = parts.routineState;
+  if (!incoming && parts.routines) {
+    incoming = RoutineBuilder.migrate(defaultPlans, parts.routines);
+    incoming.routines = incoming.routines.filter((routine) => Object.hasOwn(parts.routines, routine.id));
+    incoming.customExercises = incoming.customExercises.filter((entry) =>
+      incoming.routines.some((routine) => routine.rows.some((row) => row.exerciseId === entry.id)),
+    );
+  }
+  if (parts.routineState && !RoutineBuilder.usable(parts.routineState))
+    throw new Error('Backup contains missing exercise references.');
+  const routineStateNext = incoming
+    ? {
+        version: 1,
+        routines: merge('Routines', routineState.routines, incoming.routines, (item) => item.id),
+        customExercises: merge(
+          'Custom exercises',
+          routineState.customExercises,
+          incoming.customExercises,
+          (item) => item.id,
+        ),
+        favorites: merge('Favorites', routineState.favorites, incoming.favorites, (item) => item),
+      }
+    : undefined;
+  if (routineStateNext && !RoutineBuilder.usable(routineStateNext))
+    throw new Error('Merge contains missing exercise references.');
+  const config =
+    parts.exerciseConfig === undefined
+      ? undefined
+      : Object.fromEntries(
+          merge(
+            'Exercise settings',
+            Object.entries(exerciseConfig),
+            Object.entries(parts.exerciseConfig),
+            (item) => item[0],
+          ),
+        );
+  const { exerciseNotes: currentNotes, ...currentPrefs } = data.training || {};
+  const { exerciseNotes: incomingNotes, ...incomingPrefs } = parts.workout.training || {};
+  const workout = { ...parts.workout, ...data, sets: sets.records, body, workouts };
+  if (data.training || parts.workout.training) {
+    workout.training = Object.fromEntries(
+      merge('Preferences', Object.entries(currentPrefs), Object.entries(incomingPrefs), (item) => item[0]),
+    );
+    if (incomingNotes || currentNotes)
+      workout.training.exerciseNotes = Object.fromEntries(
+        merge(
+          'Exercise notes',
+          Object.entries(currentNotes || {}),
+          Object.entries(incomingNotes || {}),
+          (item) => item[0],
+        ),
+      );
+  }
+  const sessions = parts.activeSession
+    ? merge('Active workout', active ? [active] : [], [parts.activeSession], () => 'active')
+    : [];
+  return {
+    changes,
+    parts: { workout, routineState: routineStateNext, exerciseConfig: config, activeSession: sessions[0] },
+  };
+}
+async function chooseRestore(parts) {
+  const dialog = $('restorePreview');
+  const summary = previewMerge(parts);
+  $('restoreCounts').replaceChildren(
+    ...summary.changes.map((change) =>
+      el(
+        'p',
+        change.label +
+          ' · ' +
+          change.added +
+          ' add · ' +
+          change.skipped +
+          ' skip · ' +
+          change.conflicts +
+          ' conflict' +
+          (change.conflicts === 1 ? '' : 's'),
+        'small',
+      ),
+    ),
+  );
+  dialog.returnValue = '';
+  const option = await new Promise((resolve) => {
+    dialog.addEventListener('close', () => resolve(dialog.returnValue), { once: true });
+    showDialog(dialog);
+  });
+  return option === 'merge' || option === 'replace' ? option : null;
+}
+function applyRestore(parts, mode) {
+  if (mode === 'merge') restoreBackup(previewMerge(parts).parts);
+  else
+    restoreBackup(parts, () => {
+      try {
+        localStorage.setItem(recoveryKey, JSON.stringify(makeBackup()));
+      } catch {
+        throw new Error('Replacement cancelled. There is not enough space to save a recovery snapshot.');
+      }
+      showRecoveryActions();
+    });
+}
+$('restoreCancel').onclick = () => $('restorePreview').close('cancel');
+$('restoreMerge').onclick = () => $('restorePreview').close('merge');
+$('restoreReplace').onclick = () => $('restorePreview').close('replace');
+$('recoverSnapshot').onclick = async () => {
+  try {
+    const parts = IronCore.backupParts(read(recoveryKey, null));
+    const mode = await chooseRestore(parts);
+    if (!mode) return;
+    applyRestore(parts, mode);
+    toast('Snapshot restored');
+    window.dispatchEvent(new Event('ironlog:saved'));
+  } catch (error) {
+    status('status', error.message);
+  }
+};
+$('exportSnapshot').onclick = () => {
+  const snapshot = read(recoveryKey, null);
+  if (snapshot)
+    download('iron-log-before-replacement.json', JSON.stringify(snapshot, null, 2), 'application/json');
+};
+showRecoveryActions();
 $('file').onchange = async () => {
   const file = $('file').files[0];
   if (!file) return;
@@ -1310,16 +1720,10 @@ $('file').onchange = async () => {
             reader.readAsText(file);
           });
     const parts = IronCore.backupParts(JSON.parse(content));
-    if (
-      !(await confirmAction(
-        'Replace local workouts and settings included in this backup?',
-        'Restore backup',
-        'Restore local backup?',
-      ))
-    )
-      return;
-    restoreBackup(parts);
-    toast('Backup restored');
+    const mode = await chooseRestore(parts);
+    if (!mode) return;
+    applyRestore(parts, mode);
+    toast(mode === 'merge' ? 'Backup merged' : 'Backup restored');
     window.dispatchEvent(new Event('ironlog:saved'));
   } catch (error) {
     status('status', error.message || 'Could not restore backup.');
@@ -1329,10 +1733,11 @@ $('file').onchange = async () => {
 };
 
 const restPref = 'iron-log-auto-rest-v1';
-$('autoRest').checked = read(restPref, true) !== false;
+$('autoRest').checked = data.training?.autoRest ?? read(restPref, true) !== false;
 $('autoRest').onchange = () => {
   try {
     localStorage.setItem(restPref, JSON.stringify($('autoRest').checked));
+    setPreference('autoRest', $('autoRest').checked);
   } catch {
     toast('Browser storage is unavailable.');
   }

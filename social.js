@@ -692,14 +692,15 @@
     const row = await cloudRow(user, true);
     if (!row) throw new Error('No cloud backup found.');
     const parts = backupParts(row.payload);
-    if (!await confirmAction('Replace local workouts and settings included in your cloud backup?', 'Restore backup')
-        || auth?.user.id !== user) return;
-    restoreBackup(parts);
+    const mode = await chooseRestore(parts);
+    if (!mode || auth?.user.id !== user) return;
+    applyRestore(parts, mode);
     clearTimeout(backupTimer);
     backupAgain = false;
     clearPendingBackup(user, pendingBackup(user));
     write(pref + '-server', row.updated_at);
-    say('Cloud backup restored.', true);
+    if (mode === 'merge') window.dispatchEvent(new Event('ironlog:saved'));
+    say(mode === 'merge' ? 'Cloud backup merged.' : 'Cloud backup restored.', true);
   }));
 
   $('autoCloud').onchange = guarded(async () => {

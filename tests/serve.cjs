@@ -6,6 +6,8 @@ const assets = {
   'index.html': 'text/html; charset=utf-8',
   'social.js': 'text/javascript',
   'app.js': 'text/javascript',
+  'training-core.js': 'text/javascript',
+  'training-ui.js': 'text/javascript',
   'routine-builder.js': 'text/javascript',
   'routine-ui.js': 'text/javascript',
   'exercise-library.js': 'text/javascript',

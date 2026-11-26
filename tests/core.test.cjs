@@ -106,3 +106,67 @@ test('builder backups round-trip prescriptions, favorites, custom exercises and 
   routineState.routines[0].rows[0].config.rir = 6;
   assert.throws(() => backupParts({ ...workout, routineState }), /Invalid routine builder/);
 });
+
+const Training = require('../training-core');
+
+test('warm-ups round down from working load and isolation uses fewer sets', () => {
+  const rows = Training.warmups(185, 5, 'Barbell', false);
+  assert.ok(rows.length > 2);
+  assert.ok(rows.every((row, i) => row.weight % 5 === 0 && row.weight < 185 && (!i ||
+    (row.weight > rows[i - 1].weight && row.reps < rows[i - 1].reps))));
+  assert.equal(Training.warmups(20, 2.5, 'Dumbbell', true).length, 1);
+  assert.deepEqual(Training.warmups(5, 5, 'Barbell', false), []);
+});
+
+test('plate calculator honors paired inventory, returns nearest totals and converts units accurately', () => {
+  const inventory = [{ weight: 25, quantity: 2 }, { weight: 10, quantity: 3 }, { weight: 5, quantity: 1 }];
+  const result = Training.plates(105, 45, inventory);
+  assert.equal(result.exact, false);
+  assert.deepEqual(result.lower, { total: 95, side: [25] });
+  assert.deepEqual(result.upper, { total: 115, side: [25, 10] });
+  assert.equal(Training.plates(115, 45, inventory).exact, true);
+  assert.equal(Training.plates(30, 45, inventory).lower, null);
+  assert.ok(Math.abs(Training.pounds(Training.display(185, 'kg'), 'kg') - 185) < 1e-9);
+});
+
+test('records and muscle volume exclude warm-ups, drop sets, partial reps and duplicate IDs as appropriate', () => {
+  const make = (id, weight, reps, kind, date = '2026-11-23') => ({ id, weight, reps, kind, date, split: 'Push', exercise: 'Bench press' });
+  const working = make('a', 100, 8, 'working');
+  const rows = [working, working, make('b', 150, 4, 'warmup'), make('c', 125, 5, 'drop'),
+    { ...make('d', 90, 12, 'working', '2026-11-25'), partials: 4 }];
+  const { best } = Training.records(rows, set => set.exercise);
+  assert.equal(best.find(item => item.key === 'weight').value, 100);
+  assert.equal(best.find(item => item.key === 'estimate').value, 100 * (1 + 8 / 30));
+  assert.equal(best.find(item => item.key === 'sessionVolume').value, 1080);
+  assert.deepEqual(Training.muscleVolume(rows, () => ({ muscle: 'Chest', secondary: ['Triceps', 'Triceps'] })).get('Triceps'),
+    { direct: 0, secondary: 2 });
+  assert.equal(Training.volume(rows.slice(1)), 100 * 8 + 125 * 5 + 90 * 12);
+});
+
+test('backup merge keeps identical loads with distinct IDs and reports divergent stable records', () => {
+  const base = workout.sets[0];
+  const result = Training.mergeSets([base], [{ ...base }, { ...base, weight: 140 }, { ...base, id: 'separate' }]);
+  assert.deepEqual(result.report, { added: 1, skipped: 1, conflicts: 1 });
+  assert.deepEqual(result.records, [base, { ...base, id: 'separate' }]);
+  const { id, ...old } = base;
+  const legacy = Training.mergeSets([base], [old, old]);
+  assert.equal(legacy.report.skipped, 1);
+  assert.equal(legacy.report.added, 1);
+  assert.equal(Training.mergeSets(legacy.records, [old, old]).report.added, 0);
+});
+
+test('a backup stores the unfinished session and delayed-entry draft on its original key', () => {
+  const activeSession = { id: 'workout-test', date: '2026-11-25', split: 'Push', started: 1764000000000,
+    rows: [{ id: 'r', exerciseId: 'lift-bench-press' }], drafts: { r: { weight: 185, reps: '5' } }, extra: { r: 4 } };
+  const target = storage();
+  writeBackup(target, backupParts({ ...workout, activeSession, training: { unit: 'kg', bodyGoal: 170 } }));
+  assert.deepEqual(JSON.parse(target.getItem(keys.activeSession)), activeSession);
+  assert.equal(JSON.parse(target.getItem(keys.workout)).training.unit, 'kg');
+  assert.throws(() => backupParts({ ...workout, activeSession: { ...activeSession, date: '2026-02-30' } }), /Invalid active/);
+});
+
+test('rolling bodyweight uses the seven calendar days ending at each measurement', () => {
+  assert.deepEqual(Training.rollingWeight([
+    { date: '2026-11-16', weight: 160 }, { date: '2026-11-22', weight: 170 }, { date: '2026-11-23', weight: 168 }
+  ]), [['2026-11-16', 160], ['2026-11-22', 165], ['2026-11-23', 169]]);
+});

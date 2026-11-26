@@ -960,3 +960,37 @@ dialog .actions {
 
 .builderActions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px }
 .exerciseCard .sectionLine > div:nth-child(2), .savedRoutine h3 { flex: 1; min-width: 0; overflow-wrap: anywhere }
+
+.inlineLabel { display: flex; align-items: center; min-height: 44px; gap: 8px }
+.inlineLabel input { inline-size: 18px; block-size: 18px; accent-color: var(--accent) }
+#plannedSets { margin: 10px 0 }
+#plannedSets table { table-layout: fixed }
+#plannedSets td:nth-child(2) { color: var(--muted) }
+#plannedSets tr[data-current=true] { color: var(--accent) }
+#plannedSets button { min-height: 44px; padding-inline: 3px }
+#plannedSets .planPrevious { white-space: normal }
+#liftTools { margin-top: 5px }
+#restProgress { position: absolute; width: calc(100% - 12px); height: 3px; bottom: 2px; accent-color: var(--accent) }
+#timerbar { padding-bottom: 8px }
+.calendarGrid { display: grid; grid-template-columns: repeat(7,minmax(0,1fr)); gap: 2px; margin-block: 9px }
+.calendarGrid .weekday { text-align: center; color: var(--muted); font-size: .68rem }
+.calendarGrid button { padding: 3px 0; min-width: 0; font-size: .76rem; background: transparent; border: 1px solid transparent; border-radius: 7px }
+.calendarGrid button[data-trained=true] { background: var(--inner); color: var(--accent) }
+.calendarGrid button[aria-pressed=true] { border-color: var(--accent) }
+.calendarGrid small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .59rem }
+.muscleRow,.recordRow { padding: 10px 0; border-top: 1px solid var(--border) }
+.muscleRow progress { display: block; width: 100%; height: 8px; accent-color: var(--accent); margin-top: 5px }
+.recordBadge { color: var(--accent); font-weight: 700 }
+.warmupRow { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,.75fr) auto auto; gap: 5px; align-items: end; margin-bottom: 8px }
+.warmupRow button { padding-inline: 6px; font-size: .82rem }
+.barbellPreview { min-height: 70px; display: flex; align-items: center; justify-content: center; overflow: hidden }
+.barbellPreview .shaft { width: 28%; height: 7px; background: #a9b2af }
+.barbellPreview .plate { flex: 0 1 10px; min-width: 3px; border: 1px solid var(--bg); border-radius: 3px; background: var(--accent); z-index: 1 }
+#restorePreview .actions { margin-top: 10px }
+textarea { width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 9px; padding: 8px }
+
+#setSubmitHome:empty { display: none }
+#plannedSets .plannedSubmit { min-height: 44px; font-size: .76rem; padding-inline: 3px }
+#trainingLog.planActive .comparison { grid-template-columns: 1fr; margin-block: 9px }
+#trainingLog.planActive .comparison > :first-child { display: none }
+#trainingLog.planActive .comparison > :last-child { display: flex; justify-content: space-between; align-items: center }

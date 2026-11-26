@@ -2,9 +2,24 @@
 
 Iron Log is a local-first strength training PWA with optional Supabase workout backups and hydration groups. Training, routines, exercise settings and the rest timer stay usable offline.
 
-## Iron Log 5.4
+## Iron Log 5.5
 
 Train opens a dedicated logger with an exercise queue, working-set progress and a completion summary. History expands by workout, and Progress and Body show charts and period metrics. Hydration focuses on intake and groups. Membership, recovery and backups live in Profile.
+
+## Training experience
+
+- **Train** compares planned working sets with the previous comparable workout. The active queue and unfinished entry drafts survive reloads. You can undo the last set, edit logged sets, and adjust the number of planned sets during a workout.
+- Classify working, warm-up, drop and back-off sets separately. Record failure and partial reps independently. Progression and records use full working reps from the same exercise identity. General volume includes drop and back-off sets and excludes warm-ups. Supersets alternate two adjacent exercises and start rest after the second exercise.
+- Warm-ups use the chosen work weight and equipment increment. The plate calculator applies only to bar-based equipment and supports per-unit bar weights and paired plate inventory. Choose pounds or kilograms in Profile. Stored weights and CSV exports use pounds.
+- History’s monthly calendar groups completed workout sessions, including multiple on one day. Older sets use their original date and routine grouping, and duration is available where recorded. Progress lists personal records and separates direct muscle sets from secondary involvement. Body includes a goal and a rolling seven-day average.
+- The rest timer uses a deadline and recovers its display after reload. Sound requires an unlocked audio session, and vibration depends on browser support. iOS may suspend background JavaScript. Home Screen Web Push requires a separate delivery service and is not used for rest alerts.
+
+## Backup and recovery
+
+- Open a local or cloud backup to preview added, skipped and conflicting records. Merge keeps the current value for conflicts. Distinct set IDs remain distinct even when their numbers match. Older sets without IDs use a fingerprint and occurrence count.
+- Replace stores one pre-replacement snapshot on this device. Recover or export it under **Profile → Local backups and export**. Each successful replacement keeps the immediately preceding snapshot. Replacement stops if the browser cannot store it.
+- Backups include workout sessions and notes, active workout drafts, training preferences, bodyweight goals, routines, exercise settings and exercise notes. Older backups remain readable and old storage keys are retained. No database migration is required for 5.5.
+- The existing cloud backup remains a single version with conflict protection. Supabase Free has a 500 MB database limit, so 5.5 keeps rollback on the device instead of storing multiple cloud copies of each complete backup.
 
 ## Routine builder
 
@@ -23,6 +38,6 @@ Train opens a dedicated logger with an exercise queue, working-set progress and 
 
 ## Development
 
-Run `npm ci`, `npm test`, and `npm run test:db` with Docker. Run `npx playwright install --with-deps chromium webkit` once and then `npm run test:browser` for desktop Chromium and mobile WebKit, including a compact 320px layout check. The database tests apply the migrations to an isolated PostgreSQL instance with fixture users. Browser tests use a mocked Supabase API and WebSocket.
+Run `npm ci`, `npm test`, and `npm run test:db` with Docker. Run `npx playwright install --with-deps chromium webkit` once and then `npm run test:browser` for desktop Chromium and mobile WebKit, including 320px, 375px, 390px and 430px layout checks. The database tests apply the migrations to an isolated PostgreSQL instance with fixture users. Browser tests use a mocked Supabase API and WebSocket.
 
 For an existing Supabase deployment, apply only the new migration after the four legacy migrations. The migration enables the hydration tables in the existing Realtime publication. Keep anonymous sign-in enabled. Reload older app tabs to get the updated backup and group controls.

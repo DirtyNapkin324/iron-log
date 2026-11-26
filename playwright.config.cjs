@@ -8,7 +8,11 @@ module.exports = defineConfig({
   projects: [
     { name: 'Chromium', use: { browserName: 'chromium' } },
     { name: 'Mobile WebKit', use: { ...devices['iPhone 13'], browserName: 'webkit' } },
-    { name: 'Compact WebKit', grep: /six tabs/, use: { ...devices['iPhone 13'], browserName: 'webkit', viewport: { width: 320, height: 568 } } }
+    ...[320, 375, 430].map(width => ({
+      name: 'WebKit ' + width, grep: /six tabs/, use: {
+        ...devices['iPhone 13'], browserName: 'webkit', viewport: { width, height: width === 320 ? 568 : 844 }
+      }
+    }))
   ],
   webServer: {
     command: 'node tests/serve.cjs',

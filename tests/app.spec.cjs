@@ -175,7 +175,7 @@ test('local import and export include settings and accept legacy backups', async
   });
   await page.locator('#localBackups summary').click();
   await restore(backup);
-  await confirm(page);
+  await page.locator('#restoreReplace').click();
   await expect(page.locator('#status')).toHaveText('Backup restored on this device.');
   const downloadReady = page.waitForEvent('download');
   await page.locator('#export').click();
@@ -183,7 +183,7 @@ test('local import and export include settings and accept legacy backups', async
   const exported = JSON.parse(await readFile(await download.path(), 'utf8'));
   expect(exported).toMatchObject(backup);
   await restore({ sets: [], body: [] });
-  await confirm(page);
+  await page.locator('#restoreReplace').click();
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('iron-log-coach-v3')).sets)).toEqual([]);
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('iron-log-exercise-config-v1')))).toEqual(backup.exerciseConfig);
   await tab(page, 'workout');
@@ -252,7 +252,7 @@ test('cloud saves use a version, restore settings, and stop auto backup on confl
   await page.goto('/');
   await tab(page, 'settings');
   await page.locator('#socialRestore').click();
-  await confirm(page);
+  await page.locator('#restoreReplace').click();
   await expect(page.locator('#profileStatus')).toHaveText('Cloud backup restored.');
   await page.locator('#socialBackup').click();
   await confirm(page);
@@ -319,7 +319,7 @@ test('routine ordering, workout completion and history deletion use in-app contr
   await expect(workout.locator('table')).toBeVisible();
   await workout.getByRole('button', { name: 'Delete' }).click();
   await confirm(page);
-  await expect(page.getByText('Your first workout will appear here.')).toBeVisible();
+  await expect(workout.locator('summary')).toContainText('0 exercises');
 });
 
 test('six tabs fit the current viewport and charts render at device pixel density', async ({ page }) => {
@@ -349,6 +349,11 @@ test('six tabs fit the current viewport and charts render at device pixel densit
   await expect(page.locator('#addSelected')).toBeInViewport();
   await expect(page.locator('#closePicker')).toBeInViewport();
   expect(await page.locator('#exercisePicker').evaluate(dialog => dialog.scrollWidth <= dialog.clientWidth)).toBe(true);
+  await page.locator('#closePicker').click();
+  await page.locator('#closeRoutine').click();
+  await page.locator('#beginWorkout').click();
+  await expect(page.getByRole('button', { name: 'Log working set 1' })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
 test('workout recommendations and automatic advancement honor saved prescriptions', async ({ page }) => {
@@ -485,7 +490,7 @@ test('prescriptions, custom library entries and substitutions preserve distinct 
   await tab(page, 'settings');
   await page.locator('#localBackups summary').click();
   await page.locator('#file').setInputFiles({ name: 'backup.json', mimeType: 'application/json', buffer: downloaded });
-  await confirm(page);
+  await page.locator('#restoreReplace').click();
   await expect(page.locator('#status')).toHaveText('Backup restored on this device.');
   await tab(page, 'workout');
   await expect(page.locator('#coachplan')).toContainText('Gym A floor press');
@@ -502,4 +507,138 @@ test('drag handles reorder exercise cards with pointer input', async ({ page }) 
   await page.mouse.move(to.x + 20, to.y + 15, { steps: 8 });
   await page.mouse.up();
   await expect(page.locator('#routineRows li').first()).toContainText('Incline Dumbbell Press');
+});
+
+test('active logger compares prior sets, tracks classification, and preserves drafts on reload', async ({ page }) => {
+  await page.addInitScript(() => {
+    if (!localStorage.getItem('iron-log-coach-v3')) localStorage.setItem('iron-log-coach-v3', JSON.stringify({
+      sets: [
+        { id: 'old-a', date: '2024-01-01', split: 'Push', exercise: 'Bench press', weight: 100, reps: 5, rir: '2', notes: '' },
+        { id: 'old-b', date: '2024-01-01', split: 'Push', exercise: 'Bench press', weight: 95, reps: 6, rir: '2', notes: '' }
+      ], body: []
+    }));
+  });
+  await page.goto('/');
+  await page.locator('#beginWorkout').click();
+  await expect(page.locator('#plannedSets tbody tr').first()).toContainText('100 lb × 5');
+  await expect(page.locator('#plannedSets tbody tr').nth(1)).toContainText('95 lb × 6');
+  await page.locator('#weight').fill('185');
+  await page.locator('#reps').fill('5');
+  await page.reload();
+  await expect(page.locator('#weight')).toHaveValue('185');
+  await page.locator('#warmupOpen').click();
+  await expect(page.locator('.warmupRow').first()).toBeVisible();
+  await page.locator('.warmupRow').first().getByRole('button', { name: 'Log', exact: true }).click();
+  await page.locator('#warmupClose').click();
+  await expect(page.locator('#setProgressText')).toHaveText('0 of 3 working sets');
+  await page.locator('#platesOpen').click();
+  await expect(page.locator('#plateTarget')).toHaveValue('185');
+  await expect(page.locator('#plateResult')).toContainText('Load each side');
+  await page.locator('#plateTarget').fill('186');
+  await expect(page.locator('#plateResult')).toContainText('Target is unavailable');
+  await page.locator('#platesClose').click();
+  await page.locator('#setDetails summary').click();
+  await page.locator('#partialReps').fill('2');
+  await page.locator('#failedSet').check();
+  await page.getByRole('button', { name: 'Log working set 1' }).click();
+  await expect(page.locator('#currentsets')).toContainText('+2 partial');
+  await expect(page.locator('#currentsets')).toContainText('Failure');
+  await expect(page.locator('#setProgressText')).toHaveText('1 of 3 working sets');
+  await page.locator('#undoSet').click();
+  await expect(page.locator('#setProgressText')).toHaveText('0 of 3 working sets');
+  await expect(page.locator('#currentsets')).toContainText('Warm-up');
+  await page.locator('#addWorkingSet').click();
+  await expect(page.locator('#plannedSets tbody tr')).toHaveCount(4);
+  await page.locator('#removeWorkingSet').click();
+  await expect(page.locator('#plannedSets tbody tr')).toHaveCount(3);
+});
+
+test('timer, calendar, muscle volume, records and unit preferences work together', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('#beginWorkout').click();
+  await page.locator('#weight').fill('100');
+  await page.locator('#saveSet').click();
+  await expect(page.locator('#restProgress')).toBeVisible();
+  await page.locator('#barpause').click();
+  const before = await page.locator('#barclock').textContent();
+  await page.locator('#barExtend').click();
+  await expect(page.locator('#barclock')).not.toHaveText(before);
+  const after = await page.locator('#barclock').textContent();
+  await page.reload();
+  await expect(page.locator('#barclock')).toHaveText(after);
+  await page.locator('#barstop').click();
+  await page.locator('#sessionOpen').click();
+  await page.locator('#workoutMemo').fill('Training fixture');
+  await page.locator('#workoutDetailsForm').getByRole('button', { name: 'Save details' }).click();
+  await page.locator('#finishWorkout').click();
+  await confirm(page);
+  await page.locator('#summaryDone').click();
+  await page.locator('#beginWorkout').click();
+  await page.locator('#finishWorkout').click();
+  await confirm(page);
+  await page.locator('#summaryHistory').click();
+  await page.locator('#calendarPanel summary').click();
+  await expect(page.locator('#calendarMetrics')).toContainText('2 workouts');
+  await page.locator('#calendarGrid [data-trained=true]').click();
+  await expect(page.locator('.workoutCard')).toHaveCount(2);
+  await page.locator('#monthPrevious').click();
+  await expect(page.locator('#calendarMetrics')).toContainText('0 workouts');
+  await tab(page, 'settings');
+  await page.locator('#weightUnit').selectOption('kg');
+  await tab(page, 'progress');
+  await page.getByText('Personal records', { exact: true }).click();
+  await expect(page.locator('#personalRecords')).toContainText('45.4 kg');
+  await page.getByText('Muscle group volume', { exact: true }).click();
+  await expect(page.locator('#muscleChart')).toContainText('1 direct');
+  await expect(page.locator('#muscleChart')).toContainText('1 secondary');
+  await tab(page, 'body');
+  await page.locator('#bodyweight').fill('75');
+  await page.locator('#recordWeight').click();
+  await expect(page.locator('#bw')).toHaveText('75 kg');
+  await page.getByText('Bodyweight goal', { exact: true }).click();
+  await page.locator('#bodyGoal').fill('74');
+  await page.getByRole('button', { name: 'Save goal' }).click();
+  await expect(page.locator('#bodyGoalProgress')).toContainText('1 kg above goal');
+});
+
+test('backup merge previews conflicts and replacement preserves a recovery snapshot', async ({ page }) => {
+  const fixture = backup.sets[0];
+  await page.addInitScript(sets => {
+    if (!localStorage.getItem('iron-log-coach-v3')) localStorage.setItem('iron-log-coach-v3', JSON.stringify({ sets, body: [] }));
+  }, [fixture]);
+  await page.goto('/');
+  await tab(page, 'settings');
+  await page.locator('#localBackups summary').click();
+  const restore = value => page.locator('#file').setInputFiles({
+    name: 'backup.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(value))
+  });
+  await restore({ sets: [fixture, { ...fixture, weight: 500 }, { ...fixture, id: 'second-identical' }], body: [] });
+  await expect(page.locator('#restoreCounts')).toContainText('1 add · 1 skip · 1 conflict');
+  await page.locator('#restoreMerge').click();
+  const read = () => page.evaluate(() => JSON.parse(localStorage.getItem('iron-log-coach-v3')).sets);
+  await expect.poll(read).toEqual([fixture, { ...fixture, id: 'second-identical' }]);
+  await restore({ sets: [], body: [] });
+  await page.locator('#restoreReplace').click();
+  await expect.poll(read).toEqual([]);
+  await page.locator('#recoverSnapshot').click();
+  await page.locator('#restoreReplace').click();
+  await expect.poll(read).toEqual([fixture, { ...fixture, id: 'second-identical' }]);
+});
+
+test('superset changes exercise after the first lift and starts rest after the second', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('#editRoutine').click();
+  await page.getByRole('button', { name: 'Edit Bench press', exact: true }).click();
+  await page.locator('#supersetNext').check();
+  await page.locator('#exerciseForm .sheetFooter button').click();
+  await page.locator('#saveRoutine').click();
+  await page.locator('#beginWorkout').click();
+  await page.locator('#weight').fill('100');
+  await page.locator('#saveSet').click();
+  await expect(page.locator('#exerciseTitle')).toHaveText('Incline Dumbbell Press');
+  await expect(page.locator('#timerbar')).toBeHidden();
+  await page.locator('#weight').fill('45');
+  await page.locator('#saveSet').click();
+  await expect(page.locator('#exerciseTitle')).toHaveText('Bench press');
+  await expect(page.locator('#timerbar')).toBeVisible();
 });

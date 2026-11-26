@@ -182,6 +182,8 @@
 
   function editSettings(row) {
     editingRow = row;
+    $('supersetLabel').hidden = draft.rows.at(-1)?.id === row.id;
+    $('supersetNext').checked = row.superset === true;
     $('exerciseFormTitle').textContent = rowExercise(row).name;
     $('customFields').hidden = true;
     $('customName').required = false;
@@ -303,6 +305,7 @@
   };
   $('saveRoutine').onclick = () => {
     draft.name = draft.name.trim();
+    if (draft.rows.length) delete draft.rows.at(-1).superset;
     if (!draft.name || !draft.rows.length) {
       $('routineStatus').textContent = 'Enter a routine name and add at least one exercise.';
       return;
@@ -324,7 +327,8 @@
 
   const fields = { count: 'rowSets', rest: 'rowRest', lo: 'rowLo', hi: 'rowHi', step: 'rowStep' };
   function fillConfig(config) {
-    for (const [field, id] of Object.entries(fields)) $(id).value = config[field];
+    for (const [field, id] of Object.entries(fields))
+      $(id).value = field === 'step' ? weightInput(config[field]) : config[field];
     $('rowRir').value = config.rir ?? '';
     $('rowInstructions').value = config.instructions ?? '';
     $('exerciseFormStatus').textContent = '';
@@ -337,7 +341,14 @@
   };
   $('exerciseForm').onsubmit = (event) => {
     event.preventDefault();
-    const config = Object.fromEntries(Object.entries(fields).map(([field, id]) => [field, Number($(id).value)]));
+    const config = Object.fromEntries(
+      Object.entries(fields).map(([field, id]) => [
+        field,
+        field === 'step' ? inputPounds($(id).value) : Number($(id).value),
+      ]),
+    );
+    const initialStep = editingRow ? rowSettings(editingRow).step : RoutineBuilder.defaultConfig.step;
+    if ($('rowStep').value === weightInput(initialStep)) config.step = initialStep;
     if ($('rowRir').value !== '') config.rir = Number($('rowRir').value);
     if ($('rowInstructions').value.trim()) config.instructions = $('rowInstructions').value.trim();
     if (!IronCore.validPrescription(config)) {
@@ -346,6 +357,12 @@
     }
     if (editingRow) {
       editingRow.config = config;
+      const index = draft.rows.indexOf(editingRow);
+      if (!$('supersetLabel').hidden && $('supersetNext').checked) {
+        if (draft.rows[index - 1]?.superset) delete draft.rows[index - 1].superset;
+        if (draft.rows[index + 1]?.superset) delete draft.rows[index + 1].superset;
+        editingRow.superset = true;
+      } else delete editingRow.superset;
       drawDraft();
     } else {
       const name = $('customName').value.trim();
@@ -523,6 +540,7 @@
     };
   $('customExercise').onclick = () => {
     editingRow = null;
+    $('supersetLabel').hidden = true;
     $('exerciseFormTitle').textContent = 'Create exercise';
     $('customFields').hidden = false;
     $('customName').required = true;
