@@ -10,9 +10,12 @@
   <title>Iron Log</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
-  <link rel="stylesheet" href="app.css?v=54">
-  <script defer src="iron-core.js?v=52"></script>
-  <script defer src="app.js?v=54"></script>
+  <link rel="stylesheet" href="app.css?v=55">
+  <script defer src="iron-core.js?v=55"></script>
+  <script defer src="exercise-library.js?v=55"></script>
+  <script defer src="routine-builder.js?v=55"></script>
+  <script defer src="app.js?v=55"></script>
+  <script defer src="routine-ui.js?v=55"></script>
   <script defer src="social.js?v=54"></script>
 </head>
 <body>
@@ -28,9 +31,10 @@
     <div class="trainLayout">
       <div>
         <div class="panel planSetup" id="workoutSetup">
-          <h2>Training split</h2>
-          <div id="dayButtons" class="segmented" aria-label="Training split">
-            <button data-day="Push">Push</button><button data-day="Pull">Pull</button><button data-day="Legs">Legs</button><button data-day="Upper">Upper</button><button data-day="Lower">Lower</button>
+          <h2>Workout setup</h2>
+          <div class="routineChooser">
+            <label>Routine<select id="routineSelect"></select></label>
+            <button id="manageRoutines" class="secondary">Manage routines</button>
           </div>
           <div id="planOverview" class="muted"></div>
           <button class="primary full" id="beginWorkout">Start workout</button>
@@ -44,6 +48,7 @@
           <div class="sectionLine"><span class="kicker" id="activeWorkoutInfo"></span><button type="button" id="finishWorkout" class="quiet" hidden>Finish</button></div>
           <div id="logtitle" class="muted"></div>
           <h2 id="exerciseTitle" class="exerciseTitle">Choose exercise</h2>
+          <p id="exerciseInstructions" class="muted small" hidden></p>
           <div id="setProgress" class="setProgress" aria-hidden="true"></div>
           <div id="setProgressText" class="small muted"></div>
           <div class="comparison">
@@ -59,6 +64,7 @@
             <div class="actions loggerActions">
               <button type="button" id="applyTarget" class="quiet">Use recommendation</button>
               <button type="button" id="nextExercise" class="quiet">Next exercise</button>
+              <button type="button" id="substituteExercise" class="quiet" hidden>Swap for today</button>
               <button type="button" id="cancelEdit" class="quiet" hidden>Cancel edit</button>
             </div>
             <details class="disclosure" id="setDetails">
@@ -68,13 +74,15 @@
                 <label>Session<select id="split"><option>Push</option><option>Pull</option><option>Legs</option><option>Upper</option><option>Lower</option><option value="Fitness assignment">Separate workout</option><option>Other</option></select></label>
               </div>
               <label>Exercise<input id="exercise" list="exercises" placeholder="Bench press" autocomplete="off"><datalist id="exercises"></datalist></label>
-              <label>Reps in reserve<select id="rir"><option value="">Not logged</option><option>0</option><option>1</option><option>2</option><option>3</option><option>4+</option></select></label>
+              <label>Reps in reserve<select id="rir"><option value="">Not logged</option><option>0</option><option>1</option><option>2</option><option>3</option><option>4</option><option value="4+">4+ (legacy)</option><option>5</option></select></label>
               <label>Notes<input id="notes" placeholder="Tempo, warm-up or drop set"></label>
             </details>
           </form>
           <details class="disclosure">
             <summary>Exercise settings</summary>
             <p class="muted" id="recommendationWhy"></p>
+            <p id="routinePrescriptionNotice" class="muted small" hidden>This exercise uses the routine prescription. Use Edit routine to make changes for your next workout.</p>
+            <div id="globalPrescription">
             <div class="fields three">
               <label>Working sets<input id="cfgSets" type="number" min="1" max="10"></label>
               <label>Min reps<input id="cfgLo" type="number" min="1" max="30"></label>
@@ -83,6 +91,7 @@
               <label>Rest (sec)<input id="cfgRest" type="number" min="15" max="600"></label>
             </div>
             <div class="actions"><button id="cfgSave" class="secondary">Save settings</button><button id="cfgReset" class="quiet">Reset</button></div>
+            </div>
           </details>
         </div>
       </div>
@@ -209,7 +218,7 @@
     <h2 class="groupLabel">Preferences</h2>
     <div class="panel settingsGroup">
       <label class="settingRow switchRow">Automatic rest timer<input type="checkbox" id="autoRest" class="switch" role="switch" checked></label>
-      <div class="settingRow version">App version <span>5.3</span></div>
+      <div class="settingRow version">App version <span>5.4</span></div>
     </div>
   </section>
 </main>
@@ -228,12 +237,60 @@
     <div class="actions"><button value="cancel" class="secondary" autofocus>Cancel</button><button value="confirm" class="primary" id="confirmAction">Continue</button></div>
   </form>
 </dialog>
-<dialog id="routineDialog" aria-labelledby="routineDialogTitle">
-  <div class="sectionLine"><h2 id="routineDialogTitle">Edit routine</h2><button type="button" id="closeRoutine" class="quiet">Close</button></div>
-  <ol id="routineRows"></ol>
-  <div class="actions"><button id="addRoutineRow" class="secondary">Add exercise</button><button id="resetRoutine" class="quiet">Reset defaults</button></div>
-  <p id="routineStatus" class="small destructive" role="status"></p>
-  <button id="saveRoutine" class="primary full">Save routine</button>
+<dialog id="manageRoutineDialog" class="builderSheet" aria-labelledby="manageRoutineTitle">
+  <div class="sheetHeader"><h2 id="manageRoutineTitle">My routines</h2><button id="closeManage" class="quiet">Done</button></div>
+  <div class="sheetScroll">
+    <div id="savedRoutines"></div>
+    <details class="disclosure"><summary>Starting templates</summary><div id="routineTemplates"></div></details>
+    <details class="disclosure"><summary>Archived routines</summary><div id="archivedRoutines"></div></details>
+  </div>
+  <div class="sheetFooter"><button id="newRoutine" class="primary full">New routine</button></div>
+</dialog>
+<dialog id="routineDialog" class="builderSheet" aria-labelledby="routineDialogTitle">
+  <div class="sheetHeader"><h2 id="routineDialogTitle">Edit routine</h2><button id="closeRoutine" class="quiet">Cancel</button></div>
+  <div class="sheetScroll" id="routineScroll">
+    <label>Routine name<input id="routineName" maxlength="80" autocomplete="off"></label>
+    <p id="routineTotals" class="muted small"></p>
+    <ol id="routineRows"></ol>
+    <button id="resetRoutine" class="quiet" hidden>Reset to default</button>
+  </div>
+  <div class="sheetFooter"><p id="routineStatus" class="small destructive" role="status"></p>
+    <div class="builderActions"><button id="addRoutineRow" class="secondary">＋ Add exercise</button><button id="saveRoutine" class="primary">Save routine</button></div>
+  </div>
+</dialog>
+<dialog id="exercisePicker" class="builderSheet" aria-labelledby="pickerTitle">
+  <div class="sheetHeader"><h2 id="pickerTitle">Exercise library</h2><button id="closePicker" class="quiet">Cancel</button></div>
+  <div class="pickerTools">
+    <input id="exerciseSearch" type="search" placeholder="Search exercises" aria-label="Search exercises" autocomplete="off">
+    <div class="fields"><label>Muscle group<select id="filterMuscle"></select></label><label>Equipment<select id="filterEquipment"></select></label></div>
+    <div class="pickerScopes" aria-label="Exercise list"><button data-scope="all" class="secondary">All</button><button data-scope="recent" class="secondary">Recent</button><button data-scope="favorites" class="secondary">Favorites</button></div>
+  </div>
+  <div class="sheetScroll" id="pickerList"></div>
+  <div class="sheetFooter pickerFooter"><button id="customExercise" class="secondary">Create custom</button><button id="addSelected" class="primary">Add exercises</button></div>
+</dialog>
+<dialog id="exerciseFormDialog" class="builderSheet formSheet" aria-labelledby="exerciseFormTitle">
+  <div class="sheetHeader"><h2 id="exerciseFormTitle">Exercise prescription</h2><button id="cancelExerciseForm" class="quiet">Cancel</button></div>
+  <form id="exerciseForm">
+    <div class="sheetScroll">
+      <div id="customFields" hidden>
+        <label>Exercise name<input id="customName" maxlength="100"></label>
+        <label>Alternative names, separated by commas<input id="customAliases" maxlength="240"></label>
+        <div class="fields"><label>Primary muscle<select id="customMuscle"></select></label><label>Equipment<select id="customEquipment"></select></label></div>
+        <label>Secondary muscles, separated by commas<input id="customSecondary" maxlength="240"></label>
+      </div>
+      <div class="fields">
+        <label>Working sets<input type="number" id="rowSets" min="1" max="10" required></label>
+        <label>Rest (seconds)<input type="number" id="rowRest" min="15" max="600" required></label>
+        <label>Minimum reps<input type="number" id="rowLo" min="1" max="30" required></label>
+        <label>Maximum reps<input type="number" id="rowHi" min="1" max="30" required></label>
+        <label>Weight increment (lb)<input type="number" id="rowStep" min=".5" max="50" step="any" required></label>
+        <label>Target RIR<select id="rowRir"><option value="">Default</option><option>0</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
+      </div>
+      <label>Instructions<textarea id="rowInstructions" maxlength="500" rows="3"></textarea></label>
+      <button type="button" class="quiet" id="clearRowConfig">Use exercise defaults</button>
+    </div>
+    <div class="sheetFooter"><p id="exerciseFormStatus" class="small destructive" role="status"></p><button class="primary full">Save exercise</button></div>
+  </form>
 </dialog>
 <dialog id="workoutSummary" aria-labelledby="summaryTitle">
   <div class="summaryMark" aria-hidden="true">✓</div>

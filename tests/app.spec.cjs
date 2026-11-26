@@ -22,11 +22,18 @@ const makeSession = () => ({
 });
 
 const confirm = page => page.locator('#confirmAction').click();
+async function selectExercise(page, name, query = name) {
+  await page.locator('#exerciseSearch').fill(query);
+  await page.locator('#pickerList input').and(page.getByLabel(name, { exact: true })).check();
+}
 async function editRoutine(page, name) {
   await page.locator('#editRoutine').click();
-  await page.getByRole('textbox', { name: 'Exercise 2', exact: true }).fill(name);
+  await page.locator('#routineRows').getByRole('button', { name: /^Replace / }).nth(1).click();
+  await selectExercise(page, name);
+  await page.locator('#addSelected').click();
   await page.locator('#saveRoutine').click();
 }
+
 
 const tab = (page, name) => page.locator('[data-tab="' + name + '"]').click();
 
@@ -129,7 +136,7 @@ test('workout sets, body weight, timer and routines survive reload', async ({ pa
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto('/');
-  await editRoutine(page, 'Weighted dips');
+  await editRoutine(page, 'Weighted Dip');
   await page.locator('#beginWorkout').click();
   await expect(page.locator('#exerciseTitle')).toHaveText('Bench press');
   await page.locator('#weight').fill('110');
@@ -147,7 +154,7 @@ test('workout sets, body weight, timer and routines survive reload', async ({ pa
   await expect(page.locator('#bodyChart')).toBeVisible();
   await page.reload();
   await expect(page.locator('#barpause')).toHaveText('Resume');
-  await expect(page.locator('#coachplan')).toContainText('Weighted dips');
+  await expect(page.locator('#coachplan')).toContainText('Weighted Dip');
   await tab(page, 'history');
   await page.locator('.workoutCard summary').first().click();
   await expect(page.locator('#history').getByText('first working set')).toBeVisible();
@@ -251,7 +258,7 @@ test('cloud saves use a version, restore settings, and stop auto backup on confl
   await confirm(page);
   await expect(page.locator('#profileStatus')).toHaveText('Cloud backup saved.');
   expect(cloud.requests.find(request => request.path === 'save_workout_backup').args).toMatchObject({
-    expected: '2025-01-01T00:00:00+00:00', snapshot: backup
+    expected: '2025-01-01T00:00:00+00:00', snapshot: { ...backup, routineState: { version: 1 } }
   });
   await tab(page, 'settings');
   await page.locator('#autoCloud').check();
@@ -259,7 +266,7 @@ test('cloud saves use a version, restore settings, and stop auto backup on confl
   await expect(page.locator('#autoCloudStatus')).toContainText('Automatic backups on.');
   cloud.conflict = true;
   await tab(page, 'workout');
-  await editRoutine(page, 'Face pull');
+  await editRoutine(page, 'Face Pull');
   await tab(page, 'settings');
   await expect(page.locator('#autoCloudStatus')).toContainText('Cloud backup changed on another device.');
   await expect(page.locator('#autoCloud')).not.toBeChecked();
@@ -275,15 +282,23 @@ test('installed shell opens offline with the current app scripts', async ({ page
   await tab(page, 'social');
   await expect(page.locator('#hydrationGuest')).toBeVisible();
   await expect(page.locator('#offline')).toBeVisible();
+  await tab(page, 'workout');
+  await page.locator('#editRoutine').click();
+  await page.locator('#addRoutineRow').click();
+  await selectExercise(page, 'Kettlebell Deadlift');
+  await page.locator('#addSelected').click();
+  await page.locator('#saveRoutine').click();
+  await expect(page.locator('#coachplan')).toContainText('Kettlebell Deadlift');
 });
 
 test('routine ordering, workout completion and history deletion use in-app controls', async ({ page }) => {
   await page.goto('/');
   await page.locator('#editRoutine').click();
   await page.getByRole('button', { name: 'Move up Lateral Raise' }).click();
-  await expect(page.getByRole('textbox', { name: 'Exercise 4', exact: true })).toHaveValue('Lateral Raise');
+  await expect(page.locator('#routineRows li').nth(3)).toContainText('Lateral Raise');
   await page.locator('#addRoutineRow').click();
-  await page.getByRole('textbox', { name: 'Exercise 7', exact: true }).fill('Cable Crunch');
+  await selectExercise(page, 'Cable Crunch');
+  await page.locator('#addSelected').click();
   await page.locator('#saveRoutine').click();
   await expect(page.locator('#coachplan .listRow').nth(3)).toContainText('Lateral Raise');
   await page.locator('#beginWorkout').click();
@@ -327,6 +342,13 @@ test('six tabs fit the current viewport and charts render at device pixel densit
       expect(await chart.evaluate(canvas => canvas.width === Math.round(canvas.getBoundingClientRect().width * devicePixelRatio))).toBe(true);
     }
   }
+  await tab(page, 'workout');
+  await page.locator('#editRoutine').click();
+  await page.locator('#addRoutineRow').click();
+  await page.locator('#exerciseSearch').fill('Romanian deadlift');
+  await expect(page.locator('#addSelected')).toBeInViewport();
+  await expect(page.locator('#closePicker')).toBeInViewport();
+  expect(await page.locator('#exercisePicker').evaluate(dialog => dialog.scrollWidth <= dialog.clientWidth)).toBe(true);
 });
 
 test('workout recommendations and automatic advancement honor saved prescriptions', async ({ page }) => {
@@ -350,4 +372,134 @@ test('workout recommendations and automatic advancement honor saved prescription
   await expect(page.locator('#barclock')).toHaveText(/^01:1[0-5]$/);
   await page.reload();
   await expect(page.locator('#exerciseTitle')).toHaveText('Incline Dumbbell Press');
+});
+
+test('create and organize custom routines with templates and a multi-select library', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('#manageRoutines').click();
+  await page.getByText('Starting templates', { exact: true }).click();
+  await page.getByRole('button', { name: 'Full body', exact: true }).click();
+  await expect(page.locator('#routineTotals')).toContainText('5 exercises');
+  await page.locator('#routineName').fill('Saturday Strength');
+  await page.locator('#addRoutineRow').click();
+  await page.locator('#filterMuscle').selectOption('Chest');
+  await page.locator('#filterEquipment').selectOption('Dumbbell');
+  await selectExercise(page, 'Dumbbell Bench Press', 'db bench');
+  await page.getByRole('button', { name: 'Favorite Dumbbell Bench Press', exact: true }).click();
+  await selectExercise(page, 'Incline Dumbbell Press', 'incline db');
+  await page.locator('#addSelected').click();
+  await expect(page.locator('#routineTotals')).toContainText('7 exercises');
+  await page.getByRole('button', { name: 'Duplicate Incline Dumbbell Press', exact: true }).click();
+  await expect(page.locator('#routineTotals')).toContainText('8 exercises');
+  await page.getByRole('button', { name: 'Remove Incline Dumbbell Press', exact: true }).last().click();
+  await page.locator('#saveRoutine').click();
+  await page.getByRole('button', { name: 'Edit Saturday Strength', exact: true }).click();
+  await page.locator('#routineName').fill('Unsaved');
+  await page.locator('#closeRoutine').click();
+  await expect(page.locator('#confirmTitle')).toHaveText('Discard changes?');
+  await confirm(page);
+  await page.getByRole('button', { name: 'Edit Saturday Strength', exact: true }).click();
+  await page.locator('#routineName').fill('Weekend Strength');
+  await page.locator('#saveRoutine').click();
+  await page.getByRole('button', { name: 'Duplicate Weekend Strength', exact: true }).click();
+  await page.getByRole('button', { name: 'Move up Weekend Strength copy', exact: true }).click();
+  await page.getByRole('button', { name: 'Archive Weekend Strength copy', exact: true }).click();
+  await page.getByText('Archived routines', { exact: true }).click();
+  await page.getByRole('button', { name: 'Restore Weekend Strength copy', exact: true }).click();
+  await page.getByRole('button', { name: 'Train Weekend Strength copy', exact: true }).click();
+  await expect(page.locator('#exerciseTitle')).toHaveText('Barbell Back Squat');
+  await expect(page.locator('#activeWorkoutInfo')).toContainText('Weekend Strength copy');
+});
+
+test('prescriptions, custom library entries and substitutions preserve distinct history through backups', async ({ page }) => {
+  await page.addInitScript(() => {
+    if (localStorage.getItem('iron-log-coach-v3')) return;
+    localStorage.setItem('iron-log-coach-v3', JSON.stringify({
+      sets: [{ id: 'past-bench', date: '2024-01-01', split: 'Push', exercise: 'Bench press', weight: 135, reps: 6, rir: '2', notes: '' }],
+      body: []
+    }));
+  });
+  await page.goto('/');
+  await page.locator('#editRoutine').click();
+  await page.getByRole('button', { name: 'Edit Bench press', exact: true }).click();
+  await page.locator('#rowSets').fill('1');
+  await page.locator('#rowRest').fill('75');
+  await page.locator('#rowStep').fill('10');
+  await page.locator('#rowRir').selectOption('2');
+  await page.locator('#rowInstructions').fill('Pause on the chest.');
+  await page.locator('#exerciseForm button[type=submit], #exerciseForm .sheetFooter button').click();
+  await page.locator('#addRoutineRow').click();
+  await page.getByRole('button', { name: 'Recent', exact: true }).click();
+  await expect(page.locator('#pickerList input').and(page.getByLabel('Bench press', { exact: true }))).toBeVisible();
+  await page.locator('#customExercise').click();
+  await page.locator('#customName').fill('Gym A floor press');
+  await page.locator('#customMuscle').selectOption('Chest');
+  await page.locator('#customEquipment').selectOption('Barbell');
+  await page.locator('#exerciseForm .sheetFooter button').click();
+  await page.getByRole('button', { name: 'Favorite Gym A floor press', exact: true }).click();
+  await page.getByRole('button', { name: 'Favorites', exact: true }).click();
+  await expect(page.getByLabel('Gym A floor press', { exact: true })).toBeChecked();
+  await page.locator('#addSelected').click();
+  await page.locator('#saveRoutine').click();
+  await page.locator('#beginWorkout').click();
+  await expect(page.locator('#target')).toHaveText('145 lb × 4 · 2 RIR');
+  await expect(page.locator('#exerciseInstructions')).toHaveText('Pause on the chest.');
+  await page.locator('#saveSet').click();
+  await expect(page.locator('#barclock')).toHaveText(/^01:1[0-5]$/);
+  await expect(page.locator('#exerciseTitle')).toHaveText('Incline Dumbbell Press');
+  await page.locator('#coachplan').getByRole('button', { name: /Bench press/ }).first().click();
+  await page.locator('#substituteExercise').click();
+  await selectExercise(page, 'Smith Machine Bench Press');
+  await page.locator('#addSelected').click();
+  await expect(page.locator('#exerciseTitle')).toHaveText('Smith Machine Bench Press');
+  await expect(page.locator('#last')).toHaveText('—');
+  await expect(page.locator('#target')).toContainText('Baseline');
+  await page.reload();
+  await expect(page.locator('#exerciseTitle')).toHaveText('Smith Machine Bench Press');
+  await page.locator('#weight').fill('50');
+  await page.locator('#saveSet').click();
+  await page.locator('#finishWorkout').click();
+  await confirm(page);
+  await page.locator('#summaryDone').click();
+  await expect(page.locator('#coachplan').first()).toContainText('Bench press');
+  await page.locator('#editRoutine').click();
+  await page.getByRole('button', { name: 'Replace Bench press', exact: true }).click();
+  await selectExercise(page, 'Dumbbell Bench Press');
+  await page.locator('#addSelected').click();
+  await page.locator('#saveRoutine').click();
+  await tab(page, 'settings');
+  await page.locator('#localBackups summary').click();
+  const downloading = page.waitForEvent('download');
+  await page.locator('#export').click();
+  const downloaded = await readFile(await (await downloading).path());
+  const snapshot = JSON.parse(downloaded);
+  expect(snapshot.sets).toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: 'past-bench', exercise: 'Bench press' }),
+    expect.objectContaining({ exercise: 'Smith Machine Bench Press', exerciseId: 'lift-smith-machine-bench-press' })
+  ]));
+  expect(snapshot.routineState.favorites).toEqual([snapshot.routineState.customExercises.find(e => e.name === 'Gym A floor press').id]);
+  expect(snapshot.routines.Push[0]).toBe('Dumbbell Bench Press');
+  expect(snapshot.sets.find(set => set.weight === 145)).toMatchObject({ exerciseId: 'lift-bench-press' });
+  await page.evaluate(() => localStorage.removeItem('iron-log-routine-builder-v1'));
+  await page.reload();
+  await tab(page, 'settings');
+  await page.locator('#localBackups summary').click();
+  await page.locator('#file').setInputFiles({ name: 'backup.json', mimeType: 'application/json', buffer: downloaded });
+  await confirm(page);
+  await expect(page.locator('#status')).toHaveText('Backup restored on this device.');
+  await tab(page, 'workout');
+  await expect(page.locator('#coachplan')).toContainText('Gym A floor press');
+  await expect(page.locator('#coachplan .listRow').first()).toContainText('Dumbbell Bench Press');
+});
+
+test('drag handles reorder exercise cards with pointer input', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('#editRoutine').click();
+  const from = await page.getByRole('button', { name: 'Drag Bench press', exact: true }).boundingBox();
+  const to = await page.locator('#routineRows li').nth(1).boundingBox();
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(to.x + 20, to.y + 15, { steps: 8 });
+  await page.mouse.up();
+  await expect(page.locator('#routineRows li').first()).toContainText('Incline Dumbbell Press');
 });

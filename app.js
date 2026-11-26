@@ -19,12 +19,13 @@ const displayDate = (date, options = { month: 'short', day: 'numeric', year: 'nu
   stamp(date).toLocaleDateString(undefined, options);
 const isIsolation = (n) => /curl|raise|fly|pec deck|pushdown|extension|calf/i.test(n);
 const isWorking = (set) => !/drop set|warm.?up/i.test(set.notes || '');
-const splitName = (split) => (split === 'Fitness assignment' ? 'Separate workout' : split);
+const splitName = (split) =>
+  split === 'Fitness assignment' ? 'Separate workout' : routineById(split)?.name || split;
 const sessionSets = (date = $('date').value, split = $('split').value) =>
   data.sets.filter((set) => set.date === date && set.split === split);
 const regular = () => data.sets.filter((set) => set.split !== 'Fitness assignment');
 const volume = (sets) => sets.reduce((sum, set) => sum + set.weight * set.reps, 0);
-const exerciseCount = (sets) => new Set(sets.map((set) => norm(set.exercise))).size;
+const exerciseCount = (sets) => new Set(sets.map((set) => exerciseIdentity(set))).size;
 const est = (set) => (set.reps === 1 ? set.weight : set.reps <= 10 ? set.weight * (1 + set.reps / 30) : null);
 
 function read(key, fallback) {
@@ -37,7 +38,7 @@ function read(key, fallback) {
 
 let data = read(key, {});
 if (!Array.isArray(data.sets) || !Array.isArray(data.body)) data = { sets: [], body: [] };
-const plans = {
+const defaultPlans = {
   Push: [
     'Bench press',
     'Incline Dumbbell Press',
@@ -65,20 +66,42 @@ const plans = {
   ],
   Lower: ['Leg Press', 'Hip Thrust', 'Leg Curl', 'Calf Raise'],
 };
-const defaultPlans = Object.fromEntries(Object.entries(plans).map(([split, names]) => [split, [...names]]));
-const custom = read(routinesKey, {});
-for (const k of Object.keys(defaultPlans)) {
-  if (
-    Array.isArray(custom[k]) &&
-    custom[k].length &&
-    custom[k].every((name) => typeof name === 'string' && name.trim())
-  ) {
-    plans[k] = custom[k];
+const builderKey = IronCore.keys.routineState;
+const storedBuilder = read(builderKey, null);
+let routineState = RoutineBuilder.usable(storedBuilder)
+  ? storedBuilder
+  : RoutineBuilder.migrate(defaultPlans, read(routinesKey, {}));
+const routineById = (id) => routineState.routines.find((routine) => routine.id === id);
+const exerciseIdentity = (set) => RoutineBuilder.identity(set);
+function rowExercise(row) {
+  if (!row) return null;
+  const entry =
+    RoutineBuilder.exercise(routineState, row.exerciseId) ||
+    active?.customExercises?.find((item) => item.id === row.exerciseId);
+  return entry && (row.name ? { ...entry, name: row.name } : entry);
+}
+let selectedRow = null;
+
+function persistRoutines(next, message) {
+  if (!RoutineBuilder.usable(next)) {
+    toast('Could not save invalid routine data.');
+    return false;
   }
+  try {
+    localStorage.setItem(builderKey, JSON.stringify(next));
+  } catch {
+    toast('Browser storage is unavailable.');
+    return false;
+  }
+  routineState = next;
+  if (message) toast(message);
+  window.dispatchEvent(new Event('ironlog:saved'));
+  return true;
 }
 let exerciseConfig = Object.assign(Object.create(null), read(configKey, {}));
 let active = read(activeKey, null);
 let editing = null;
+let repeatOrigin = null;
 let manual = false;
 let lastSubmitAt = 0;
 let toastTimer;
@@ -153,7 +176,12 @@ function persistData(message) {
 }
 
 function suggestions() {
-  const names = new Set([...(plans[$('split').value] || []), ...data.sets.map((set) => set.exercise)]);
+  const names = new Set([
+    ...workoutRows()
+      .map((row) => rowExercise(row)?.name)
+      .filter(Boolean),
+    ...data.sets.map((set) => set.exercise),
+  ]);
   $('exercises').replaceChildren(
     ...Array.from(names, (name) => {
       const option = el('option');
@@ -163,7 +191,7 @@ function suggestions() {
   );
 }
 
-function prescription(n, history, current) {
+function prescription(n, history, current, override) {
   let bench = n === 'bench press',
     iso = isIsolation(n) || /pullover|face pull|press-around|skull crusher/.test(n),
     face = n.includes('face pull'),
@@ -180,7 +208,7 @@ function prescription(n, history, current) {
   }
   let count = bench ? 3 : face ? 1 : /larsen|press-around|pullover|triceps press/.test(n) ? 2 : 3;
   let step = bench || larsen ? 5 : /dumbbell/.test(n) ? 5 : /omni chest|hammer strength/.test(n) ? 10 : 2.5;
-  let cfg = exerciseConfig[norm(n)];
+  const cfg = override ?? exerciseConfig[norm(n)];
   if (cfg) {
     count = cfg.count;
     lo = cfg.lo;
@@ -204,6 +232,8 @@ function prescription(n, history, current) {
     hi,
     step,
     rest,
+    rir: cfg?.rir,
+    instructions: cfg?.instructions,
     weight: null,
     reps: lo,
     why: 'No comparable history. Choose a comfortable starting load and leave 2–3 reps in reserve.',
@@ -219,7 +249,14 @@ function prescription(n, history, current) {
   }
   let allReady =
     last.length >= count &&
-    last.every((s) => s.reps >= hi && s.rir !== '' && s.rir != null && Number.parseInt(s.rir) >= 1);
+    last.every(
+      (s) =>
+        s.reps >= hi &&
+        s.rir !== '' &&
+        s.rir != null &&
+        Number.parseInt(s.rir) >= (cfg?.rir ?? 1) &&
+        (cfg?.rir === undefined || !/failed|not completed|very heavy/i.test(s.notes || '')),
+    );
   let unknown = prev.rir === '' || prev.rir == null,
     failed = /failed|not completed|very heavy/i.test(prev.notes || '') || (!unknown && Number(prev.rir) === 0);
   result.weight = prev.weight;
@@ -233,13 +270,17 @@ function prescription(n, history, current) {
     result.weight = Math.round((prev.weight + step) * 100) / 100;
     result.reps = lo;
     result.why =
-      'All prescribed sets reached the top of the range with at least 1 RIR. Increase load if that increment is available.';
+      'All prescribed sets reached the top of the range with at least ' +
+      (cfg?.rir ?? 1) +
+      ' RIR. Increase load if that increment is available.';
   } else if (prev.reps < lo) {
     result.weight = Math.max(0, Math.round(prev.weight * 0.95 * 100) / 100);
     result.reps = lo;
     result.why = 'Below target range last time. Use the nearest available lighter load.';
   } else if (failed) {
     result.why = 'Last set was near failure or difficult. Repeat rather than force an increase.';
+  } else if (cfg?.rir !== undefined && !unknown && Number.parseInt(prev.rir) < cfg.rir) {
+    result.why = 'Repeat at the same load until you reach your target RIR.';
   } else if (prev.reps < hi) {
     result.reps = prev.reps + 1;
     result.why = unknown
@@ -267,16 +308,53 @@ function prescription(n, history, current) {
   }
   return result;
 }
-function recommend(name) {
-  let n = norm(name),
-    split = $('split').value,
+function workoutRows() {
+  return (matchesActive() && active.rows) || routineById($('split').value)?.rows || [];
+}
+function currentRow() {
+  const row = workoutRows().find((item) => item.id === selectedRow);
+  return rowExercise(row)?.name === $('exercise').value.trim() ? row : null;
+}
+function rowDefaults(row) {
+  const entry = rowExercise(row);
+  return {
+    ...prescription(
+      norm(entry.name),
+      [],
+      [],
+      exerciseConfig[entry.id] ?? exerciseConfig[norm(entry.name)] ?? (row.legacy ? undefined : entry.defaults),
+    ),
+  };
+}
+function rowSettings(row) {
+  return row.config || rowDefaults(row);
+}
+function matchesExercise(set, name, row) {
+  const entry = rowExercise(row) || RoutineBuilder.exact.get(norm(name));
+  if (entry) return RoutineBuilder.comparable(set, entry);
+  const candidates = routineState.customExercises.filter((item) => norm(item.name) === norm(name));
+  return candidates.length === 1
+    ? RoutineBuilder.comparable(set, candidates[0])
+    : !set.exerciseId && norm(set.exercise) === norm(name);
+}
+function setsForRow(row, rows = sessionSets()) {
+  const name = rowExercise(row).name;
+  const first = workoutRows().find((item) => item.exerciseId === row.exerciseId);
+  return rows.filter(
+    (set) =>
+      matchesExercise(set, name, row) && (set.routineRowId ? set.routineRowId === row.id : row.id === first?.id),
+  );
+}
+function recommend(name, row = currentRow()) {
+  const split = $('split').value,
     date = $('date').value;
-  let same = (s) =>
-    norm(s.exercise) === n && (s.split === 'Fitness assignment') === (split === 'Fitness assignment');
+  const same = (set) =>
+    matchesExercise(set, name, row) && (set.split === 'Fitness assignment') === (split === 'Fitness assignment');
   return prescription(
-    n,
-    data.sets.filter((s) => same(s) && s.date < date),
-    data.sets.filter((s) => same(s) && s.date === date && s.split === split),
+    norm(name),
+    data.sets.filter((set) => same(set) && set.date < date),
+    row ? setsForRow(row) : sessionSets().filter(same),
+    row ? rowSettings(row) : undefined,
   );
 }
 
@@ -287,13 +365,13 @@ function matchesActive() {
   return trainingActive() && active.date === $('date').value && active.split === $('split').value;
 }
 
-function previousPerformance(name) {
+function previousPerformance(name, row) {
   const separate = $('split').value === 'Fitness assignment';
   const previous = data.sets
     .filter(
       (set) =>
         set.date < $('date').value &&
-        norm(set.exercise) === norm(name) &&
+        matchesExercise(set, name, row) &&
         (set.split === 'Fitness assignment') === separate &&
         isWorking(set),
     )
@@ -307,7 +385,14 @@ function target() {
   const name = $('exercise').value.trim();
   $('exerciseTitle').textContent = name || 'Choose exercise';
   $('saveSet').disabled = !name;
-  $('last').textContent = name ? previousPerformance(name) : '—';
+  const row = currentRow();
+  $('globalPrescription').hidden = Boolean(row?.config);
+  $('routinePrescriptionNotice').hidden = !row?.config;
+  $('substituteExercise').hidden = !matchesActive() || !row || Boolean(editing);
+  $('last').textContent = name ? previousPerformance(name, row) : '—';
+  const instructions = name && row ? rowSettings(row).instructions : '';
+  $('exerciseInstructions').textContent = instructions || '';
+  $('exerciseInstructions').hidden = !instructions;
   if (!name) {
     $('target').textContent = '—';
     $('setProgressText').textContent = '';
@@ -316,7 +401,9 @@ function target() {
     return;
   }
   const recommendation = recommend(name);
-  const done = sessionSets().filter((set) => norm(set.exercise) === norm(name) && isWorking(set)).length;
+  const done = (row ? setsForRow(row) : sessionSets().filter((set) => matchesExercise(set, name, null))).filter(
+    isWorking,
+  ).length;
   $('setProgress').replaceChildren(
     ...Array.from({ length: recommendation.count }, (_, i) => el('span', '', i < done ? 'done' : '')),
   );
@@ -325,13 +412,17 @@ function target() {
     recommendation.weight === null
       ? 'Baseline × ' + recommendation.reps
       : number(recommendation.weight) + ' lb × ' + recommendation.reps;
+  if (recommendation.rir !== undefined) $('target').textContent += ' · ' + recommendation.rir + ' RIR';
   $('recommendationWhy').textContent =
     recommendation.why +
     ' Aim for ' +
     recommendation.lo +
     '–' +
     recommendation.hi +
-    ' reps and 1–2 reps in reserve (2–3 for new lifts). Stop or modify if pain, instability or form breakdown occurs.';
+    (recommendation.rir === undefined
+      ? ' reps and 1–2 reps in reserve (2–3 for new lifts).'
+      : ' reps and ' + recommendation.rir + ' reps in reserve.') +
+    ' Stop or modify if pain, instability or form breakdown occurs.';
 }
 
 function applyTarget() {
@@ -345,16 +436,20 @@ function applyTarget() {
 
 function resetEdit() {
   editing = null;
+  repeatOrigin = null;
   $('logtitle').textContent = '';
   $('saveSet').textContent = 'Log set';
   $('cancelEdit').hidden = true;
   $('cancelEdit').textContent = 'Cancel edit';
 }
-function chooseExercise(name, scroll = false) {
+function chooseExercise(row, scroll = false) {
   resetEdit();
+  const name = rowExercise(row)?.name || '';
+  selectedRow = row?.id ?? null;
   $('exercise').value = name;
   if (matchesActive()) {
     active.exercise = name;
+    active.rowId = selectedRow;
     persistActive();
   }
   applyTarget();
@@ -377,40 +472,58 @@ function loadConfig() {
   }
 }
 
+function syncRoutineOptions() {
+  const select = $('split');
+  const chosen = select.value;
+  const options = routineState.routines.map((routine) => new Option(routine.name, routine.id));
+  options.push(new Option('Separate workout', 'Fitness assignment'), new Option('Other', 'Other'));
+  if (chosen && !options.some((option) => option.value === chosen)) options.push(new Option(chosen, chosen));
+  select.replaceChildren(...options);
+  select.value = chosen || 'Push';
+  const live = routineState.routines.filter((routine) => !routine.archived);
+  const chooser = $('routineSelect');
+  chooser.replaceChildren(...live.map((routine) => new Option(routine.name, routine.id)));
+  if (live.some((routine) => routine.id === chosen)) chooser.value = chosen;
+  else if (!trainingActive() && !manual && !editing && live.length) select.value = chooser.value;
+  chooser.disabled = !live.length;
+}
 function renderTraining() {
+  syncRoutineOptions();
   const split = $('split').value;
-  const names = plans[split] || [];
+  const queue = workoutRows();
   const rows = sessionSets();
-  const activeSession = trainingActive();
-  const showLogger = activeSession || manual || Boolean(editing);
+  const showLogger = trainingActive() || manual || Boolean(editing);
+  const available = routineById(split) && !routineById(split).archived && queue.length;
   $('trainingLog').hidden = !showLogger;
   $('workoutSetup').hidden = showLogger;
   $('finishWorkout').hidden = !matchesActive() || !!editing;
-  if (!editing && (manual || (activeSession && !matchesActive()))) {
-    $('cancelEdit').textContent = activeSession ? 'Back to workout' : 'Close logger';
+  if (!editing && (manual || (trainingActive() && !matchesActive()))) {
+    $('cancelEdit').textContent = trainingActive() ? 'Back to workout' : 'Close logger';
     $('cancelEdit').hidden = false;
   }
-  $('beginWorkout').hidden = !names.length;
-  $('routineCard').hidden = !names.length;
-  $('editRoutine').hidden = !names.length;
+  $('beginWorkout').hidden = !available;
+  $('routineCard').hidden = !queue.length || (!showLogger && !available);
+  $('editRoutine').hidden = !routineById(split);
   $('completedCard').hidden = !rows.length;
-  $('planOverview').textContent = names.length + ' exercises planned';
-  $('routineHeading').textContent = showLogger ? 'Exercise queue' : split + ' plan';
+  $('planOverview').textContent = available
+    ? queue.length + ' exercises planned'
+    : 'Create or restore a routine to start.';
+  $('routineHeading').textContent = showLogger ? 'Exercise queue' : splitName(split) + ' plan';
   $('sessionstats').textContent = rows.length + ' sets · ' + number(volume(rows)) + ' lb';
-  for (const button of document.querySelectorAll('[data-day]'))
-    button.setAttribute('aria-pressed', String(button.dataset.day === split));
   $('coachplan').replaceChildren(
-    ...names.map((name, i) => {
+    ...queue.map((row, i) => {
+      const name = rowExercise(row)?.name;
+      if (!name) return el('div', 'Exercise unavailable', 'listRow');
       const line = el('div', '', 'listRow');
       const item = el(showLogger ? 'button' : 'div', '', 'planExercise');
-      const done = rows.filter((set) => norm(set.exercise) === norm(name) && isWorking(set)).length;
+      const done = setsForRow(row, rows).filter(isWorking).length;
       item.append(
         el('span', String(i + 1).padStart(2, '0'), 'planIndex'),
         el('span', name),
-        el('span', done + '/' + recommend(name).count, 'planCount'),
+        el('span', done + '/' + rowSettings(row).count, 'planCount'),
       );
-      if (showLogger) item.onclick = () => chooseExercise(name, true);
-      if (showLogger && norm(name) === norm($('exercise').value)) item.setAttribute('aria-current', 'true');
+      if (showLogger) item.onclick = () => chooseExercise(row, true);
+      if (showLogger && currentRow()?.id === row.id) item.setAttribute('aria-current', 'true');
       line.append(item);
       return line;
     }),
@@ -423,9 +536,14 @@ function renderTraining() {
 function editSet(set, repeat = false) {
   if (page !== 'workout') tab('workout');
   manual = true;
+  selectedRow = set.routineRowId || null;
+  if (![...$('split').options].some((option) => option.value === set.split))
+    $('split').add(new Option(splitName(set.split), set.split));
   for (const k of ['date', 'split', 'exercise', 'weight', 'reps', 'rir', 'notes']) $(k).value = set[k] ?? '';
-  if (repeat) resetEdit();
-  else {
+  if (repeat) {
+    resetEdit();
+    repeatOrigin = set;
+  } else {
     editing = set.id;
     $('logtitle').textContent = 'Edit logged set';
     $('saveSet').textContent = 'Update set';
@@ -443,7 +561,8 @@ function exitManual() {
   if (trainingActive()) resumeWorkout();
   else {
     $('date').value = today();
-    $('split').value = plans[$('split').value] ? $('split').value : 'Push';
+    $('split').value = routineById($('split').value) ? $('split').value : $('routineSelect').value || 'Push';
+    selectedRow = null;
     $('setDetails').open = false;
     $('exercise').value = '';
     renderTraining();
@@ -460,6 +579,7 @@ $('manualStart').onclick = () => {
   $('exercise').focus();
 };
 $('exercise').oninput = () => {
+  selectedRow = null;
   target();
   loadConfig();
 };
@@ -469,18 +589,18 @@ $('split').onchange = () => {
   renderTraining();
   loadConfig();
 };
-for (const button of document.querySelectorAll('[data-day]'))
-  button.onclick = () => {
-    $('split').value = button.dataset.day;
-    $('exercise').value = '';
-    suggestions();
-    renderTraining();
-  };
+$('routineSelect').onchange = () => {
+  $('split').value = $('routineSelect').value;
+  $('exercise').value = '';
+  selectedRow = null;
+  suggestions();
+  renderTraining();
+};
 $('applyTarget').onclick = applyTarget;
 $('nextExercise').onclick = () => {
-  const names = plans[$('split').value] || [];
-  const i = names.findIndex((name) => norm(name) === norm($('exercise').value));
-  if (i + 1 < names.length) chooseExercise(names[i + 1]);
+  const queue = workoutRows();
+  const i = queue.findIndex((row) => row.id === currentRow()?.id);
+  if (i + 1 < queue.length) chooseExercise(queue[i + 1]);
   else toast('You reached the end of this routine.');
 };
 
@@ -490,6 +610,7 @@ $('log').onsubmit = (event) => {
     return;
   lastSubmitAt = Date.now();
   const old = editing ? data.sets.find((set) => set.id === editing) : null;
+  const row = currentRow();
   const item = {
     ...old,
     id: editing || Date.now().toString().padStart(14, '0') + '-' + Math.random().toString(36).slice(2),
@@ -501,6 +622,17 @@ $('log').onsubmit = (event) => {
     rir: $('rir').value,
     notes: $('notes').value,
   };
+  if (row) {
+    item.exerciseId = row.exerciseId;
+    item.routineRowId = row.id;
+  } else if (repeatOrigin?.exercise === item.exercise) {
+    if (repeatOrigin.exerciseId) item.exerciseId = repeatOrigin.exerciseId;
+    if (repeatOrigin.routineRowId && repeatOrigin.split === item.split)
+      item.routineRowId = repeatOrigin.routineRowId;
+  } else if (old && (old.exercise !== item.exercise || old.split !== item.split)) {
+    delete item.exerciseId;
+    delete item.routineRowId;
+  }
   if (editing) data.sets = data.sets.map((set) => (set.id === editing ? item : set));
   else data.sets.push(item);
   const wasEdit = Boolean(editing);
@@ -513,19 +645,21 @@ $('log').onsubmit = (event) => {
   applyTarget();
   if ($('autoRest').checked) startRest(recommend(item.exercise).rest);
   if (!matchesActive()) return;
-  const sets = sessionSets();
-  const completed = (name) => sets.filter((set) => norm(set.exercise) === norm(name) && isWorking(set)).length;
-  const names = plans[item.split] || [];
-  const position = names.findIndex((name) => norm(name) === norm(item.exercise));
-  if (position >= 0 && completed(item.exercise) >= recommend(item.exercise).count) {
-    const next = names.slice(position + 1).find((name) => completed(name) < recommend(name).count);
+  const queue = workoutRows();
+  const position = queue.findIndex((item) => item.id === row?.id);
+  if (position >= 0 && setsForRow(row).filter(isWorking).length >= rowSettings(row).count) {
+    const next = queue
+      .slice(position + 1)
+      .find((item) => setsForRow(item).filter(isWorking).length < rowSettings(item).count);
     if (next) chooseExercise(next);
   }
 };
 
 function activeUI() {
   const min = matchesActive() ? Math.max(0, Math.floor((Date.now() - active.started) / 60000)) : 0;
-  $('activeWorkoutInfo').textContent = matchesActive() ? active.split + ' · ' + min + ' min' : 'Set logger';
+  $('activeWorkoutInfo').textContent = matchesActive()
+    ? (active.name || splitName(active.split)) + ' · ' + min + ' min'
+    : 'Set logger';
 }
 function persistActive() {
   try {
@@ -534,19 +668,40 @@ function persistActive() {
   activeUI();
 }
 function resumeWorkout() {
+  syncRoutineOptions();
+  if (![...$('split').options].some((option) => option.value === active.split))
+    $('split').add(new Option(active.name || active.split, active.split));
   $('split').value = active.split;
   $('date').value = active.date;
-  const names = plans[active.split] || [];
-  const sets = sessionSets();
-  const next = names.find(
-    (name) => sets.filter((set) => norm(set.exercise) === norm(name)).length < recommend(name).count,
-  );
+  active.rows ||= RoutineBuilder.clone(routineById(active.split)?.rows || []);
+  const fallbackName = active.exercise;
+  const queue = workoutRows().filter((row) => rowExercise(row));
+  const next = queue.find((row) => setsForRow(row).filter(isWorking).length < rowSettings(row).count);
   suggestions();
-  chooseExercise(active.exercise || next || names[names.length - 1] || '');
+  chooseExercise(
+    queue.find((row) => row.id === active.rowId) ||
+      (active.rowId === undefined && queue.find((row) => rowExercise(row)?.name === active.exercise)) ||
+      next ||
+      queue[queue.length - 1],
+  );
+  if (!queue.length && fallbackName) {
+    $('exercise').value = fallbackName;
+    target();
+  }
 }
 $('beginWorkout').onclick = () => {
-  if (!(plans[$('split').value] || []).length) return;
-  active = { split: $('split').value, date: today(), started: Date.now() };
+  const routine = routineById($('split').value);
+  if (!routine?.rows.length || routine.archived) return;
+  active = {
+    split: routine.id,
+    name: routine.name,
+    rows: RoutineBuilder.clone(routine.rows),
+    customExercises: RoutineBuilder.clone(
+      routineState.customExercises.filter((entry) => routine.rows.some((row) => row.exerciseId === entry.id)),
+    ),
+    date: today(),
+    started: Date.now(),
+  };
   persistActive();
   resumeWorkout();
   $('exerciseTitle').scrollIntoView({ block: 'nearest' });
@@ -563,7 +718,7 @@ $('finishWorkout').onclick = async () => {
     return;
   const sets = sessionSets(active.date, active.split);
   const minutes = Math.max(0, Math.floor((Date.now() - active.started) / 60000));
-  $('summarySplit').textContent = active.split + ' · ' + displayDate(active.date);
+  $('summarySplit').textContent = (active.name || splitName(active.split)) + ' · ' + displayDate(active.date);
   $('summaryMetrics').replaceChildren(
     metric(sets.length, 'Sets'),
     metric(exerciseCount(sets), 'Exercises'),
@@ -579,88 +734,6 @@ $('summaryDone').onclick = () => $('workoutSummary').close();
 $('summaryHistory').onclick = () => {
   $('workoutSummary').close();
   tab('history');
-};
-
-let routineDraft = [];
-let routineSplit;
-function drawRoutineRows(focusIndex) {
-  const list = $('routineRows');
-  list.replaceChildren(
-    ...routineDraft.map((name, i) => {
-      const row = el('li', '', 'routineRow');
-      const input = el('input');
-      input.value = name;
-      input.maxLength = 100;
-      input.placeholder = 'Exercise name';
-      input.setAttribute('aria-label', 'Exercise ' + (i + 1));
-      input.oninput = () => {
-        routineDraft[i] = input.value;
-      };
-      function control(icon, label, handler, disabled) {
-        const button = el('button', icon, 'secondary');
-        button.type = 'button';
-        button.setAttribute('aria-label', label + ' ' + (name || 'exercise ' + (i + 1)));
-        button.onclick = handler;
-        button.disabled = disabled;
-        return button;
-      }
-      function move(offset) {
-        [routineDraft[i], routineDraft[i + offset]] = [routineDraft[i + offset], routineDraft[i]];
-        drawRoutineRows(i + offset);
-      }
-      row.append(
-        input,
-        control('↑', 'Move up', () => move(-1), i === 0),
-        control('↓', 'Move down', () => move(1), i === routineDraft.length - 1),
-        control('×', 'Remove', () => {
-          routineDraft.splice(i, 1);
-          drawRoutineRows();
-        }),
-      );
-      return row;
-    }),
-  );
-  $('addRoutineRow').disabled = routineDraft.length >= 30;
-  if (focusIndex !== undefined) list.children[focusIndex]?.firstElementChild.focus();
-}
-$('editRoutine').onclick = () => {
-  routineSplit = $('split').value;
-  routineDraft = [...plans[routineSplit]];
-  $('routineDialogTitle').textContent = 'Edit ' + routineSplit.toLowerCase() + ' routine';
-  $('routineStatus').textContent = '';
-  drawRoutineRows();
-  showDialog($('routineDialog'));
-};
-$('closeRoutine').onclick = () => $('routineDialog').close();
-$('addRoutineRow').onclick = () => {
-  routineDraft.push('');
-  drawRoutineRows(routineDraft.length - 1);
-};
-$('resetRoutine').onclick = async () => {
-  if (!(await confirmAction('Replace the draft with the default exercises?', 'Reset draft', 'Reset routine?')))
-    return;
-  routineDraft = [...defaultPlans[routineSplit]];
-  drawRoutineRows();
-};
-$('saveRoutine').onclick = () => {
-  const names = [...new Set(routineDraft.map((name) => name.trim()).filter(Boolean))];
-  if (!names.length || names.length > 30 || names.some((name) => name.length > 100)) {
-    $('routineStatus').textContent = 'Enter 1–30 exercises, each up to 100 characters.';
-    return;
-  }
-  const next = { ...plans, [routineSplit]: names };
-  try {
-    localStorage.setItem(routinesKey, JSON.stringify(next));
-  } catch {
-    $('routineStatus').textContent = 'Browser storage is unavailable.';
-    return;
-  }
-  plans[routineSplit] = names;
-  $('routineDialog').close();
-  suggestions();
-  renderTraining();
-  toast('Routine saved');
-  window.dispatchEvent(new Event('ironlog:saved'));
 };
 
 function saveExerciseConfig(next) {
@@ -804,7 +877,7 @@ function renderHistory() {
     card.open = open.has(key);
     const exercises = new Map();
     for (const set of workout) {
-      const name = norm(set.exercise);
+      const name = exerciseIdentity(set);
       if (!exercises.has(name)) exercises.set(name, []);
       exercises.get(name).push(set);
     }
@@ -930,7 +1003,7 @@ function renderProgress() {
   const range = $('progressRange').value;
   const selected = $('progress').value;
   const sets = regular().filter((set) => inRange(set.date, range));
-  const selectedSets = sets.filter((set) => norm(set.exercise) === selected);
+  const selectedSets = sets.filter((set) => exerciseIdentity(set) === selected);
   const estimates = new Map();
   for (const set of selectedSets) {
     const value = est(set);
@@ -1059,7 +1132,7 @@ window.addEventListener('resize', drawVisibleCharts);
 function render() {
   const select = $('progress');
   const before = select.value;
-  const exercises = new Map(regular().map((set) => [norm(set.exercise), set.exercise]));
+  const exercises = new Map(regular().map((set) => [exerciseIdentity(set), set.exercise]));
   select.replaceChildren(
     ...[...exercises]
       .sort(([, a], [, b]) => a.localeCompare(b))
@@ -1070,7 +1143,7 @@ function render() {
       }),
   );
   if (exercises.has(before)) select.value = before;
-  else if (exercises.has('bench press')) select.value = 'bench press';
+  else if (exercises.has('lift-bench-press')) select.value = 'lift-bench-press';
   if (!exercises.size) select.append(el('option', 'No exercises yet'));
   select.disabled = !exercises.size;
   suggestions();
@@ -1172,14 +1245,30 @@ function download(name, content, type) {
   setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 function makeBackup() {
-  return { ...data, routines: plans, exerciseConfig };
+  const routines = Object.fromEntries(
+    routineState.routines
+      .filter((r) => RoutineBuilder.builtIn(r.id))
+      .map((r) => [r.id, r.rows.map((row) => rowExercise(row).name)]),
+  );
+  return { ...data, routines, exerciseConfig, routineState };
 }
 function restoreBackup(parts) {
-  IronCore.writeBackup(localStorage, parts);
+  const next =
+    parts.routineState ??
+    (parts.routines !== undefined
+      ? RoutineBuilder.migrate(defaultPlans, parts.routines, routineState)
+      : undefined);
+  if (next !== undefined && !RoutineBuilder.usable(next))
+    throw new Error('Backup contains missing exercise or routine references.');
+  // Keep references from the current workout snapshot if a backup replaces the custom library.
+  if (next && active?.customExercises) {
+    for (const entry of active.customExercises) {
+      if (!RoutineBuilder.exercise(next, entry.id)) next.customExercises.push(entry);
+    }
+  }
+  IronCore.writeBackup(localStorage, { ...parts, routineState: next });
   data = parts.workout;
-  if (parts.routines !== undefined)
-    for (const split of Object.keys(defaultPlans))
-      plans[split] = parts.routines[split] || [...defaultPlans[split]];
+  if (next !== undefined) routineState = next;
   if (parts.exerciseConfig !== undefined)
     exerciseConfig = Object.assign(Object.create(null), parts.exerciseConfig);
   exitManual();
@@ -1262,7 +1351,7 @@ window.visualViewport?.addEventListener('resize', updateKeyboard);
 document.addEventListener('focusout', () => setTimeout(updateKeyboard, 0));
 $('date').value = $('bdate').value = today();
 $('headerDate').textContent = displayDate(today(), { weekday: 'short', month: 'short', day: 'numeric' });
-if (trainingActive() && plans[active.split]) resumeWorkout();
+if (trainingActive()) resumeWorkout();
 render();
 updateConnectivity();
 setInterval(activeUI, 15000);

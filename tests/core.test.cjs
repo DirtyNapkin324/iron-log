@@ -70,3 +70,39 @@ test('streaks use the recorded goal and continue through yesterday until today e
   assert.deepEqual(streaks(history, '2026-03-06'), { current: 0, longest: 2 });
   assert.deepEqual(streaks([], '2026-03-06'), { current: 0, longest: 0 });
 });
+
+test('the offline library has stable, unique exercises and valid defaults', () => {
+  const { exercises, equipment } = require('../exercise-library');
+  const { validPrescription } = require('../iron-core');
+  assert.ok(exercises.length >= 200);
+  assert.equal(new Set(exercises.map(item => item.id)).size, exercises.length);
+  for (const item of exercises) {
+    assert.match(item.id, /^lift-[a-z0-9-]+$/);
+    assert.ok(item.name && item.muscle && equipment.includes(item.equipment));
+    assert.ok(Array.isArray(item.aliases) && Array.isArray(item.secondary));
+    assert.ok(validPrescription(item.defaults), item.name);
+  }
+  assert.notEqual(exercises.find(item => item.name === 'Bench press').id,
+    exercises.find(item => item.name === 'Smith Machine Bench Press').id);
+});
+
+test('builder backups round-trip prescriptions, favorites, custom exercises and archived routines', () => {
+  const defaults = { count: 2, lo: 8, hi: 12, rest: 90, step: 2.5 };
+  const routineState = {
+    version: 1,
+    customExercises: [{ id: 'custom-example', name: 'Gym A press', muscle: 'Chest',
+      equipment: 'Machine', aliases: ['Gym A'], secondary: ['Triceps'], defaults }],
+    favorites: ['custom-example'],
+    routines: [{ id: 'routine-example', name: 'Weekend', archived: true, rows: [
+      { id: 'row-one', exerciseId: 'custom-example', config: { ...defaults, rir: 3, instructions: 'Pause briefly.' } }
+    ] }]
+  };
+  const target = storage();
+  const parts = backupParts({ ...workout, routineState });
+  writeBackup(target, parts);
+  assert.deepEqual(JSON.parse(target.getItem(keys.routineState)), routineState);
+  writeBackup(target, backupParts(workout));
+  assert.deepEqual(JSON.parse(target.getItem(keys.routineState)), routineState);
+  routineState.routines[0].rows[0].config.rir = 6;
+  assert.throws(() => backupParts({ ...workout, routineState }), /Invalid routine builder/);
+});
